@@ -28,14 +28,6 @@ export class AudioSystem {
     return src;
   }
 
-  _connect(node, gain) {
-    const g = this._ctx.createGain();
-    g.gain.value = gain;
-    node.connect(g);
-    g.connect(this._master);
-    return g;
-  }
-
   playGunshot(weapon) {
     this._init();
     const ctx = this._ctx;
@@ -158,20 +150,6 @@ export class AudioSystem {
     g.gain.exponentialRampToValueAtTime(0.001, now + 0.03);
     n.connect(f); f.connect(g); g.connect(this._master);
     n.start(now); n.stop(now + 0.04);
-  }
-
-  playGrenadeBounce() {
-    this._init();
-    const ctx = this._ctx;
-    const now = ctx.currentTime;
-    const n = this._noise(0.04);
-    const f = ctx.createBiquadFilter();
-    f.type = 'bandpass'; f.frequency.value = 800; f.Q.value = 1;
-    const g = ctx.createGain();
-    g.gain.setValueAtTime(0.3, now);
-    g.gain.exponentialRampToValueAtTime(0.001, now + 0.04);
-    n.connect(f); f.connect(g); g.connect(this._master);
-    n.start(now); n.stop(now + 0.05);
   }
 
   playExplosion() {

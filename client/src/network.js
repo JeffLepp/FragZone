@@ -3,7 +3,6 @@ export class Network {
   constructor() {
     this._ws       = null;
     this._handlers = {};
-    this._queue    = [];
     this._statusHandler = null;
     this.connected = false;
     this.id        = null;
@@ -16,8 +15,6 @@ export class Network {
     this._ws.onopen = () => {
       this.connected = true;
       this._emitStatus('open', { url });
-      this._queue.forEach(m => this._ws.send(m));
-      this._queue = [];
     };
 
     this._ws.onmessage = e => {
@@ -55,11 +52,11 @@ export class Network {
   }
 
   send(msg) {
-    const str = JSON.stringify(msg);
+    // Drop messages while disconnected: the server forgets the player when the
+    // socket dies, so anything sent during an outage is stale by the time we
+    // reconnect (the 'open' status handler re-joins from scratch instead).
     if (this.connected && this._ws.readyState === WebSocket.OPEN) {
-      this._ws.send(str);
-    } else {
-      this._queue.push(str);
+      this._ws.send(JSON.stringify(msg));
     }
   }
 }

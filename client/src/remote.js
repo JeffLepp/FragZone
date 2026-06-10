@@ -111,6 +111,17 @@ export class RemotePlayer {
 
   dispose() {
     this._scene.remove(this._group);
+    // Free GPU resources. The name-tag sprite's geometry is a single object
+    // shared by all THREE.Sprite instances, so dispose only its material/texture.
+    this._group.traverse(obj => {
+      if (obj.isSprite) {
+        obj.material.map.dispose();
+        obj.material.dispose();
+      } else if (obj.isMesh) {
+        obj.geometry.dispose();
+        obj.material.dispose();
+      }
+    });
     colorMap.delete(this.id);
   }
 }
