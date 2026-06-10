@@ -23,16 +23,24 @@ const WEAPON_DEF = {
     rpm: 600, bloomInc: 0.018, bloomDecay: 0.16,
     recoilUp: 0.017, recoilSide: 0.007, reloadTime: 2.4,
     color: 0x444444, woodColor: 0x6B4423,
-    damage: 26,
+    damage: 27, // keep in sync with server WEAPON_DATA (only applied to bots here)
   },
   pistol: {
     name: 'USP-S', maxMag: 15, reserve: 45,
     rpm: 350, bloomInc: 0.010, bloomDecay: 0.24,
     recoilUp: 0.010, recoilSide: 0.004, reloadTime: 1.7,
     color: 0x555555, woodColor: 0x555555,
-    damage: 34,
+    damage: 35, // keep in sync with server WEAPON_DATA (only applied to bots here)
   },
 };
+
+// Shared across all impact/grenade meshes — the meshes themselves are cheap to
+// create, but geometry and material hold GPU buffers and must not be recreated
+// (and silently leaked) on every wall hit or grenade.
+const IMPACT_GEO  = new THREE.SphereGeometry(0.04, 4, 4);
+const IMPACT_MAT  = new THREE.MeshBasicMaterial({ color: 0xDDCC88 });
+const GRENADE_GEO = new THREE.SphereGeometry(0.12, 8, 6);
+const GRENADE_MAT = new THREE.MeshLambertMaterial({ color: 0x445533 });
 
 export class LocalPlayer {
   constructor({ camera, scene, wallMeshes, remotePlayers, network, hud, audio, bots }) {
@@ -110,7 +118,9 @@ export class LocalPlayer {
   _bindInput() {
     window.addEventListener('keydown', e => {
       this._keys.add(e.code);
-      if (e.code === 'Tab') { e.preventDefault(); this._hud.showScoreboard(true); }
+      // Only hijack Tab once we've joined (id set by 'init') — in the menu it
+      // must keep its default focus-navigation behaviour.
+      if (e.code === 'Tab' && this.id) { e.preventDefault(); this._hud.showScoreboard(true); }
       if (!this.alive) return;
       if (e.code === 'KeyR') this._startReload();
       if (e.code === 'KeyG') this._throwGrenade();
@@ -127,8 +137,24 @@ export class LocalPlayer {
         this._dy += e.movementY;
       }
     });
-    window.addEventListener('mousedown', e => { if (e.button === 0) this._lmbDown = true; });
+    // Only register fire input while the pointer is locked — otherwise the
+    // click that re-acquires pointer lock (or hits a menu button) fires a shot.
+    window.addEventListener('mousedown', e => {
+      if (e.button === 0 && document.pointerLockElement) this._lmbDown = true;
+    });
     window.addEventListener('mouseup',   e => { if (e.button === 0) this._lmbDown = false; });
+
+    // Alt-tab / pointer-lock loss can swallow keyup and mouseup events,
+    // leaving keys (and the trigger) stuck held — release everything.
+    const releaseInput = () => {
+      this._keys.clear();
+      this._lmbDown = false;
+      this._hud.showScoreboard(false); // Tab keyup is lost on Alt+Tab
+    };
+    window.addEventListener('blur', releaseInput);
+    document.addEventListener('pointerlockchange', () => {
+      if (!document.pointerLockElement) releaseInput();
+    });
   }
 
   // ─── Lifecycle ─────────────────────────────────────────────────────────────
@@ -200,6 +226,12 @@ export class LocalPlayer {
   _switchWeapon(name) {
     if (this._weapon === name) return;
     if (this._reloading) { this._reloading = false; this._reloadTimer = 0; this._hud.showReload(1); }
+    // Kill any in-flight muzzle flash: _updateVM only manages the flash of the
+    // *current* weapon, so a flash left mid-burn on the old model would stay
+    // visible until that weapon is fired again.
+    this._muzzleFlashTimer = 0;
+    Object.values(this._vmGroups).forEach(g => { g._flash.visible = false; });
+    this._vmLight.intensity = 0;
     this._weapon = name;
     this._bloom  = 0;
     this._syncHud();
@@ -322,10 +354,7 @@ export class LocalPlayer {
   }
 
   _spawnImpact(pos, normal) {
-    const m = new THREE.Mesh(
-      new THREE.SphereGeometry(0.04, 4, 4),
-      new THREE.MeshBasicMaterial({ color: 0xDDCC88 })
-    );
+    const m = new THREE.Mesh(IMPACT_GEO, IMPACT_MAT);
     m.position.copy(pos);
     if (normal) m.position.addScaledVector(normal, 0.02);
     this._scene.add(m);
@@ -338,10 +367,7 @@ export class LocalPlayer {
     const seen = new Set(list.map(g => g.id));
     list.forEach(({ id, pos }) => {
       if (!this._grenObjs.has(id)) {
-        const m = new THREE.Mesh(
-          new THREE.SphereGeometry(0.12, 8, 6),
-          new THREE.MeshLambertMaterial({ color: 0x445533 })
-        );
+        const m = new THREE.Mesh(GRENADE_GEO, GRENADE_MAT);
         this._scene.add(m);
         this._grenObjs.set(id, m);
       }
@@ -354,10 +380,7 @@ export class LocalPlayer {
 
   addGrenade(id, pos) {
     if (!this._grenObjs.has(id)) {
-      const m = new THREE.Mesh(
-        new THREE.SphereGeometry(0.12, 8, 6),
-        new THREE.MeshLambertMaterial({ color: 0x445533 })
-      );
+      const m = new THREE.Mesh(GRENADE_GEO, GRENADE_MAT);
       this._scene.add(m);
       this._grenObjs.set(id, m);
     }
@@ -600,14 +623,8 @@ export class LocalPlayer {
     // Shoot cooldown
     if (this._shootCD > 0) this._shootCD -= dt;
 
-    // Auto/semi fire
-    if (this._lmbDown) {
-      if (this._weapon === 'ak') {
-        this._tryShoot();
-      } else if (!this._semi_prev) {
-        this._tryShoot();
-      }
-    }
+    // Fire input — _tryShoot enforces semi-auto (fresh click) for the pistol
+    if (this._lmbDown) this._tryShoot();
     this._semi_prev = this._lmbDown;
 
     // Reload
@@ -651,7 +668,6 @@ export class LocalPlayer {
       this._net.send({
         type:      'move',
         pos:       [this._pos.x, this._pos.y, this._pos.z],
-        vel:       [this._vel.x, this._vel.y, this._vel.z],
         yaw:       this._yaw,
         pitch:     this._pitch,
         crouching: this._crouchAmt > 0.5,

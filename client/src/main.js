@@ -69,7 +69,6 @@ const pickups = new PickupManager(scene);
 const remotePlayers = new Map(); // id -> RemotePlayer
 const bots = [];                  // client-side bots
 let playerName = '';
-let botRespawnTimer = 0;
 
 const localPlayer = new LocalPlayer({ camera, scene, wallMeshes, remotePlayers, network, hud, audio, bots });
 
@@ -119,10 +118,12 @@ network.onStatus((status, { url }) => {
   }
 
   if (status === 'open') {
-    if (pendingJoinName && !network.id) {
+    // Each connection is a fresh session server-side, so always (re-)join.
+    // Covers both the first connect and reconnects after a mid-game drop.
+    if (pendingJoinName) {
       network.send({ type: 'join', name: pendingJoinName });
     }
-    hud.setMenuStatus('Waiting for server...', true);
+    if (!gameStarted) hud.setMenuStatus('Waiting for server...', true);
     return;
   }
 
@@ -142,6 +143,12 @@ network.onStatus((status, { url }) => {
 });
 
 network.on('init', msg => {
+  // On a rejoin after reconnect the server assigns a new id and sends a fresh
+  // world snapshot — drop everything left over from the old session.
+  remotePlayers.forEach(rp => rp.dispose());
+  remotePlayers.clear();
+  localPlayer.updateServerGrenades([]);
+
   localPlayer.init(msg.id, msg.spawnPos);
   network.id = msg.id;
   hud.setLocalId(msg.id);
@@ -188,7 +195,8 @@ network.on('hit', msg => {
     localPlayer.takeDamage(msg.damage);
   }
   // Kill confirm from server (client-side hit marker is already shown in player.js)
-  if (msg.killed && msg.killerId === network.id) {
+  // — but not for suicides, where killer and victim are both us.
+  if (msg.killed && msg.killerId === network.id && msg.victimId !== network.id) {
     audio.playKillConfirm();
     hud.showKillConfirm();
   }
@@ -247,22 +255,44 @@ hud.onPlay(name => {
   playerName = name;
   pendingJoinName = name;
   hud.setMenuStatus('Connecting...', true);
-  network.connect(WS_URL);
-  network.send({ type: 'join', name });
+  network.connect(WS_URL); // 'open' status handler sends the join
   renderer.domElement.requestPointerLock();
 });
 
-// Press B to spawn a bot at the map spawn point farthest from the player
+// ── Bot mode ──────────────────────────────────────────────────────────────────
+// B toggles bot mode: waves that double in size each time one is cleared
+// (1 → 2 → 4 → 8 …). Bots are client-side only.
+let botMode       = false;
+let botWaveSize   = 0;
+let nextWaveTimer = 0; // countdown between clearing a wave and the next spawn
+
+function spawnBotWave(count) {
+  const pp = localPlayer.position;
+  // Fill spawn points starting with those farthest from the player, cycling
+  // with a little jitter so stacked bots don't overlap perfectly.
+  const byDist = [...SPAWN_POINTS].sort((a, b) =>
+    Math.hypot(b[0] - pp.x, b[2] - pp.z) - Math.hypot(a[0] - pp.x, a[2] - pp.z));
+  for (let i = 0; i < count; i++) {
+    const sp = byDist[i % byDist.length];
+    bots.push(new Bot(scene, [
+      sp[0] + (Math.random() - 0.5) * 2, 0, sp[2] + (Math.random() - 0.5) * 2,
+    ], wallMeshes));
+  }
+}
+
 window.addEventListener('keydown', e => {
   if (e.code === 'KeyB' && gameStarted) {
-    const pp = localPlayer.position;
-    const sp = SPAWN_POINTS.reduce((best, s) => {
-      const d  = Math.hypot(s[0] - pp.x, s[2] - pp.z);
-      const bd = Math.hypot(best[0] - pp.x, best[2] - pp.z);
-      return d > bd ? s : best;
-    });
-    bots.push(new Bot(scene, sp, wallMeshes));
-    hud.showNotification('Bot spawned — press B to add more');
+    botMode = !botMode;
+    if (botMode) {
+      botWaveSize   = 1;
+      nextWaveTimer = 0;
+      spawnBotWave(botWaveSize);
+      hud.showNotification('Bot mode ON — clear waves to face double the bots (B to stop)');
+    } else {
+      bots.forEach(b => b.dispose());
+      bots.length = 0;
+      hud.showNotification('Bot mode OFF');
+    }
   }
 });
 
@@ -289,19 +319,35 @@ function loop() {
       if (!localPlayer.alive) return;
       localPlayer.takeDamage(dmg);
       audio.playHit();
+      // Mirror bot damage to the server so its health for us stays in sync —
+      // the health-pack `health >= 100` check and damage math use server health.
+      network.send({ type: 'botDamage', damage: dmg });
       if (localPlayer.health <= 0) {
         hud.addKillFeedEntry(bot.name, playerName || 'YOU', 'ak', false);
         localPlayer.die();
-        botRespawnTimer = 3.0;
+        // Bots are client-side only: tell the server so it marks us dead and
+        // drives the respawn (otherwise its alive/health/position state
+        // desyncs and the anti-teleport check rejects our local respawn).
+        // botName lets the server broadcast a kill-feed entry to other players.
+        network.send({ type: 'botDeath', botName: bot.name });
       }
     });
   }
 
-  // Respawn after bot kill (server handles respawn for player-kills)
-  if (botRespawnTimer > 0) {
-    botRespawnTimer -= dt;
-    if (botRespawnTimer <= 0 && !localPlayer.alive) {
-      localPlayer.respawn(SPAWN_POINTS[Math.floor(Math.random() * SPAWN_POINTS.length)]);
+  // Bot mode waves: when the current wave is cleared, grow it and respawn
+  // after a short breather. Doubles up to 16, then ramps logarithmically
+  // (+log2 bots per wave: 16 → 20 → 24 → 29 …) so the count — and the
+  // framerate — doesn't explode.
+  if (botMode && bots.length === 0) {
+    if (nextWaveTimer <= 0) {
+      botWaveSize = botWaveSize < 16
+        ? botWaveSize * 2
+        : botWaveSize + Math.round(Math.log2(botWaveSize));
+      nextWaveTimer = 2.5;
+      hud.showNotification(`Wave cleared — ${botWaveSize} bots incoming`);
+    } else {
+      nextWaveTimer -= dt;
+      if (nextWaveTimer <= 0) spawnBotWave(botWaveSize);
     }
   }
 

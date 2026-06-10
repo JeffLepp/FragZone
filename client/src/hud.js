@@ -10,7 +10,7 @@ export class HUD {
     this._dmgTimer = 0;
     this._killConfirmTimer = 0;
     this._notifTimer = 0;
-    this._bloomSize = 8; // crosshair spread in px
+    this._scoreVisible = false;
 
     this._build();
   }
@@ -400,7 +400,6 @@ export class HUD {
   }
 
   setBloom(px) {
-    this._bloomSize = px;
     this._el.xhair.style.setProperty('--gap', `${Math.max(2, px)}px`);
   }
 
@@ -457,39 +456,61 @@ export class HUD {
 
   addKillFeedEntry(killerName, victimName, weapon, isMine) {
     const icons = { ak: '⚡', pistol: '✦', grenade: '💥' };
-    const icon  = icons[weapon] || '⚡';
     const el    = document.createElement('div');
     el.className = `fz-kf-entry${isMine ? ' self-kill' : ''}`;
-    el.innerHTML = `<b>${killerName}</b><span class="fz-kf-icon">${icon}</span>${victimName}`;
+    // Build with textContent — names come from the network and must never be
+    // parsed as HTML (server sanitization is a second line of defense, not the
+    // contract).
+    const killer = document.createElement('b');
+    killer.textContent = killerName;
+    const icon = document.createElement('span');
+    icon.className   = 'fz-kf-icon';
+    icon.textContent = icons[weapon] || '⚡';
+    el.append(killer, icon, victimName);
     this._killFeed.push(el);
     this._killFeedTimer = 5;
     this._renderKillFeed();
   }
 
   _renderKillFeed() {
-    this._el.killfeed.innerHTML = '';
+    this._el.killfeed.textContent = '';
     this._killFeed.slice(-5).forEach(el => this._el.killfeed.appendChild(el));
   }
 
   updateScoreboard(scores) {
     this._scores = scores;
+    // Re-render live if the player is holding Tab — otherwise the board shows
+    // the scores from the moment it was opened.
+    if (this._scoreVisible) this._renderScoreRows();
   }
 
   showScoreboard(show) {
+    this._scoreVisible = show;
     this._el.scoreBox.style.display = show ? 'block' : 'none';
-    if (!show) return;
+    if (show) this._renderScoreRows();
+  }
+
+  _renderScoreRows() {
     const rows = Object.entries(this._scores)
       .sort(([, a], [, b]) => b.kills - a.kills);
-    this._el.scoreRows.innerHTML = rows.map(([id, s]) => {
-      const kd = s.deaths === 0 ? s.kills.toFixed(0) : (s.kills / s.deaths).toFixed(2);
-      const me = id === this._localId ? ' me' : '';
-      return `<div class="fz-score-row${me}">
-        <span class="fz-score-col-name">${s.name}${me ? ' ★' : ''}</span>
-        <span class="fz-score-col-k">${s.kills}</span>
-        <span class="fz-score-col-d">${s.deaths}</span>
-        <span class="fz-score-col-kd">${kd}</span>
-      </div>`;
-    }).join('');
+    this._el.scoreRows.textContent = '';
+    for (const [id, s] of rows) {
+      const me  = id === this._localId;
+      const kd  = s.deaths === 0 ? s.kills.toFixed(0) : (s.kills / s.deaths).toFixed(2);
+      const row = document.createElement('div');
+      row.className = `fz-score-row${me ? ' me' : ''}`;
+      const cell = (cls, text) => {
+        const span = document.createElement('span');
+        span.className   = cls;
+        span.textContent = text;
+        row.appendChild(span);
+      };
+      cell('fz-score-col-name', s.name + (me ? ' ★' : ''));
+      cell('fz-score-col-k',  s.kills);
+      cell('fz-score-col-d',  s.deaths);
+      cell('fz-score-col-kd', kd);
+      this._el.scoreRows.appendChild(row);
+    }
   }
 
   showNotification(text) {

@@ -86,13 +86,20 @@ export class Bot {
 
   _die() {
     this.alive = false;
-    this._scene.remove(this._grp);
-    this._scene.remove(this._hpGrp);
+    this.dispose();
   }
 
   dispose() {
-    this._scene.remove(this._grp);
-    this._scene.remove(this._hpGrp);
+    for (const grp of [this._grp, this._hpGrp]) {
+      this._scene.remove(grp);
+      // Free GPU resources — each bot builds its own geometries/materials.
+      grp.traverse(obj => {
+        if (obj.isMesh) {
+          obj.geometry.dispose();
+          obj.material.dispose();
+        }
+      });
+    }
   }
 
   // playerPos = camera position (eye height), camera = THREE.Camera for billboard
