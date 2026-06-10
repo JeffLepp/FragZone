@@ -131,6 +131,21 @@ export class AudioSystem {
     });
   }
 
+  playPickup() {
+    this._init();
+    const ctx = this._ctx;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(520, now);
+    osc.frequency.exponentialRampToValueAtTime(880, now + 0.09);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.3, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+    osc.connect(g); g.connect(this._master);
+    osc.start(now); osc.stop(now + 0.13);
+  }
+
   playGrenadePull() {
     this._init();
     const ctx = this._ctx;

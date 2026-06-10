@@ -139,6 +139,7 @@ export class LocalPlayer {
     this._pos.set(...spawnPos);
     this._vel.set(0, 0, 0);
     this._health = 100; this._armor = 100;
+    this._resetLoadout();
     this._syncHud();
   }
 
@@ -149,9 +150,34 @@ export class LocalPlayer {
     this._health = 100; this._armor = 100;
     this._respawnTimer = 0;
     this._bloom = 0;
-    this._reloading = false;
+    this._resetLoadout();
     this._hud.hideDeathScreen();
     this._hud.updateHealth(100, 100);
+    this._syncHud();
+  }
+
+  // Fresh spawn: full mags, full reserves, grenade back
+  _resetLoadout() {
+    this._ammo     = { ak: WEAPON_DEF.ak.maxMag,  pistol: WEAPON_DEF.pistol.maxMag };
+    this._reserve  = { ak: WEAPON_DEF.ak.reserve, pistol: WEAPON_DEF.pistol.reserve };
+    this._grenades = 1;
+    this._reloading   = false;
+    this._reloadTimer = 0;
+    this._shootCD     = 0;
+    this._hud.showReload(1);
+  }
+
+  // Server-authoritative health from a health-pack pickup
+  setHealth(hp) {
+    this._health = hp;
+    this._hud.updateHealth(this._health, this._armor);
+  }
+
+  // Ammo-box pickup: tops up reserves and grenades (caps at spawn amounts +1 nade)
+  addAmmo() {
+    this._reserve.ak     = Math.min(WEAPON_DEF.ak.reserve,     this._reserve.ak + 60);
+    this._reserve.pistol = Math.min(WEAPON_DEF.pistol.reserve, this._reserve.pistol + 30);
+    this._grenades       = Math.min(2, this._grenades + 1);
     this._syncHud();
   }
 

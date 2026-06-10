@@ -6,6 +6,7 @@ import { RemotePlayer } from './remote.js';
 import { Network } from './network.js';
 import { HUD } from './hud.js';
 import { AudioSystem } from './audio.js';
+import { PickupManager } from './pickups.js';
 
 // ── Renderer ──────────────────────────────────────────────────────────────────
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -63,6 +64,7 @@ const wallMeshes = createMap(scene);
 const hud     = new HUD();
 const audio   = new AudioSystem();
 const network = new Network();
+const pickups = new PickupManager(scene);
 
 const remotePlayers = new Map(); // id -> RemotePlayer
 const bots = [];                  // client-side bots
@@ -152,6 +154,7 @@ network.on('init', msg => {
     }
   });
   if (msg.scores) hud.updateScoreboard(msg.scores);
+  if (msg.pickups) pickups.setAll(msg.pickups);
 });
 
 network.on('playerJoined', msg => {
@@ -215,6 +218,26 @@ network.on('explosion', msg => {
 
 network.on('respawn', msg => {
   localPlayer.respawn(msg.pos);
+});
+
+network.on('pickupTaken', msg => {
+  pickups.setActive(msg.id, false);
+});
+
+network.on('pickupRespawned', msg => {
+  pickups.setActive(msg.id, true);
+});
+
+// Sent only to the player who grabbed the pickup
+network.on('pickup', msg => {
+  if (msg.kind === 'health') {
+    localPlayer.setHealth(msg.health);
+    hud.showNotification('Picked up a health pack');
+  } else {
+    localPlayer.addAmmo();
+    hud.showNotification('Picked up ammo');
+  }
+  audio.playPickup();
 });
 
 // ── Menu / game start ─────────────────────────────────────────────────────────
@@ -281,6 +304,9 @@ function loop() {
       localPlayer.respawn(SPAWN_POINTS[Math.floor(Math.random() * SPAWN_POINTS.length)]);
     }
   }
+
+  // Animate pickups (bob + spin)
+  pickups.update(dt);
 
   // Update HUD
   hud.update(dt);
