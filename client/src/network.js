@@ -4,15 +4,18 @@ export class Network {
     this._ws       = null;
     this._handlers = {};
     this._queue    = [];
+    this._statusHandler = null;
     this.connected = false;
     this.id        = null;
   }
 
   connect(url) {
+    this._emitStatus('connecting', { url });
     this._ws = new WebSocket(url);
 
     this._ws.onopen = () => {
       this.connected = true;
+      this._emitStatus('open', { url });
       this._queue.forEach(m => this._ws.send(m));
       this._queue = [];
     };
@@ -26,15 +29,29 @@ export class Network {
 
     this._ws.onclose = () => {
       this.connected = false;
+      this._emitStatus('closed', { url });
       // attempt reconnect after 3 s
-      setTimeout(() => this.connect(url), 3000);
+      setTimeout(() => {
+        this._emitStatus('reconnecting', { url });
+        this.connect(url);
+      }, 3000);
     };
 
-    this._ws.onerror = () => {};
+    this._ws.onerror = () => {
+      this._emitStatus('error', { url });
+    };
   }
 
   on(type, handler) {
     this._handlers[type] = handler;
+  }
+
+  onStatus(handler) {
+    this._statusHandler = handler;
+  }
+
+  _emitStatus(type, detail = {}) {
+    if (this._statusHandler) this._statusHandler(type, detail);
   }
 
   send(msg) {

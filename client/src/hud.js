@@ -338,15 +338,26 @@ export class HUD {
     const go = () => {
       const name = this._el.nameInput.value.trim() || 'Anon';
       callback(name);
-      this._el.menu.style.display = 'none';
-      this._el.xhair.style.display = '';
-      this._el.health.style.display = '';
-      this._el.ammo.style.display = '';
     };
     this._el.playBtn.addEventListener('click', go);
     this._el.nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
     // focus name input
     setTimeout(() => this._el.nameInput.focus(), 100);
+  }
+
+  showGameHud(show) {
+    this._el.menu.style.display = show ? 'none' : 'flex';
+    this._el.xhair.style.display = show ? '' : 'none';
+    this._el.health.style.display = show ? '' : 'none';
+    this._el.ammo.style.display = show ? '' : 'none';
+  }
+
+  setMenuStatus(text, busy = false) {
+    this._el.playBtn.disabled = busy;
+    this._el.playBtn.textContent = busy ? 'CONNECTING...' : 'ENTER FRAG';
+    this._el.nameInput.disabled = busy;
+    this._el.info.style.display = text ? '' : 'none';
+    this._el.info.textContent = text || '';
   }
 
   setLocalId(id) { this._localId = id; }

@@ -108,11 +108,44 @@ function spawnExplosion(pos) {
 
 // ── Network events ────────────────────────────────────────────────────────────
 let gameStarted = false;
+let pendingJoinName = '';
+
+network.onStatus((status, { url }) => {
+  if (status === 'connecting') {
+    hud.setMenuStatus(`Connecting to ${url}`, true);
+    return;
+  }
+
+  if (status === 'open') {
+    if (pendingJoinName && !network.id) {
+      network.send({ type: 'join', name: pendingJoinName });
+    }
+    hud.setMenuStatus('Waiting for server...', true);
+    return;
+  }
+
+  if (status === 'error' && !network.id) {
+    hud.setMenuStatus(`Could not reach game server: ${url}`, false);
+    return;
+  }
+
+  if (status === 'closed' && !network.id) {
+    hud.setMenuStatus(`Disconnected. Retrying ${url}`, true);
+    return;
+  }
+
+  if (status === 'reconnecting') {
+    hud.showNotification('Connection lost - reconnecting');
+  }
+});
 
 network.on('init', msg => {
   localPlayer.init(msg.id, msg.spawnPos);
   network.id = msg.id;
   hud.setLocalId(msg.id);
+  gameStarted = true;
+  hud.setMenuStatus('', false);
+  hud.showGameHud(true);
   msg.players.forEach(p => {
     if (!remotePlayers.has(p.id)) {
       remotePlayers.set(p.id, new RemotePlayer(scene, p));
@@ -189,7 +222,8 @@ const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8080';
 
 hud.onPlay(name => {
   playerName = name;
-  gameStarted = true;
+  pendingJoinName = name;
+  hud.setMenuStatus('Connecting...', true);
   network.connect(WS_URL);
   network.send({ type: 'join', name });
   renderer.domElement.requestPointerLock();
