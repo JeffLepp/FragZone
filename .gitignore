@@ -17,6 +17,7 @@ npm-debug.log*
 
 # Vercel
 .vercel/
+.client-git-backup/
 
 # Editor / OS
 .vscode/
