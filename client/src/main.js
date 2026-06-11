@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { createMap, SPAWN_POINTS } from './map.js';
-import { Bot } from './bot.js';
+import { Bot, botBlockedAt } from './bot.js';
 import { LocalPlayer } from './player.js';
 import { RemotePlayer } from './remote.js';
 import { Network } from './network.js';
@@ -111,6 +111,13 @@ function spawnExplosion(pos) {
 let gameStarted = false;
 let pendingJoinName = '';
 
+// Pages can't preventDefault window-closing shortcuts (Ctrl+W, Alt+F4), but
+// they can require a leave-site confirmation — turning an instant close
+// mid-game into a cancellable prompt.
+window.addEventListener('beforeunload', e => {
+  if (gameStarted) { e.preventDefault(); e.returnValue = ''; }
+});
+
 network.onStatus((status, { url }) => {
   if (status === 'connecting') {
     hud.setMenuStatus(`Connecting to ${url}`, true);
@@ -178,8 +185,10 @@ network.on('playerLeft', msg => {
 });
 
 network.on('stateUpdate', msg => {
+  const seen = new Set();
   msg.players.forEach(p => {
     if (p.id === network.id) return;
+    seen.add(p.id);
     let rp = remotePlayers.get(p.id);
     if (!rp) {
       rp = new RemotePlayer(scene, p);
@@ -187,6 +196,14 @@ network.on('stateUpdate', msg => {
     }
     rp.updateState(p);
   });
+  // Prune remotes the server no longer reports — covers any path where the
+  // playerLeft broadcast was missed, so ghost avatars can't linger.
+  for (const [id, rp] of remotePlayers) {
+    if (!seen.has(id)) {
+      rp.dispose();
+      remotePlayers.delete(id);
+    }
+  }
   if (msg.scores) hud.updateScoreboard(msg.scores);
 });
 
@@ -218,10 +235,34 @@ network.on('grenadeUpdate', msg => {
   localPlayer.updateServerGrenades(msg.grenades);
 });
 
+// Keep in sync with server EXPL_RADIUS / EXPL_MAX_DMG.
+const EXPL_RADIUS  = 7;
+const EXPL_MAX_DMG = 98;
+
 network.on('explosion', msg => {
   audio.playExplosion();
   spawnExplosion(msg.pos);
   localPlayer.removeGrenade(msg.id);
+
+  // Client-side bots are invisible to the server's explosion loop, so mirror
+  // its blast damage here (same quadratic falloff + cover check). Bots only
+  // exist in our world, so every kill is credited to us.
+  const blast = new THREE.Vector3(...msg.pos);
+  for (const bot of bots) {
+    if (!bot.alive) continue;
+    const chest = bot.chestPos();
+    const dist  = blast.distanceTo(chest);
+    if (dist >= EXPL_RADIUS) continue;
+    const dir = chest.sub(blast).normalize();
+    if (new THREE.Raycaster(blast, dir, 0, dist).intersectObjects(wallMeshes, false).length > 0) continue;
+    const f = 1 - dist / EXPL_RADIUS;
+    bot.takeDamage(Math.round(EXPL_MAX_DMG * f * f));
+    if (!bot.alive) {
+      audio.playKillConfirm();
+      hud.showKillConfirm();
+      hud.addKillFeedEntry('YOU', bot.name, 'grenade', true);
+    }
+  }
 });
 
 network.on('respawn', msg => {
@@ -274,9 +315,18 @@ function spawnBotWave(count) {
     Math.hypot(b[0] - pp.x, b[2] - pp.z) - Math.hypot(a[0] - pp.x, a[2] - pp.z));
   for (let i = 0; i < count; i++) {
     const sp = byDist[i % byDist.length];
-    bots.push(new Bot(scene, [
-      sp[0] + (Math.random() - 0.5) * 2, 0, sp[2] + (Math.random() - 0.5) * 2,
-    ], wallMeshes));
+    // Some spawn points sit close to bunker walls/crates, so a jittered
+    // position can land inside geometry and pin the bot there. Retry the
+    // jitter (widening as the wave reuses points) and fall back to the bare
+    // spawn point, which is always clear.
+    const spread = 2 + Math.floor(i / byDist.length);
+    let x = sp[0], z = sp[2];
+    for (let tries = 0; tries < 10; tries++) {
+      const jx = sp[0] + (Math.random() - 0.5) * spread;
+      const jz = sp[2] + (Math.random() - 0.5) * spread;
+      if (!botBlockedAt(jx, jz)) { x = jx; z = jz; break; }
+    }
+    bots.push(new Bot(scene, [x, 0, z], wallMeshes));
   }
 }
 
