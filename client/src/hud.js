@@ -230,7 +230,7 @@ export class HUD {
   <button id="fz-play">ENTER FRAG</button>
   <div class="controls">
     WASD · move &nbsp;|&nbsp; MOUSE · aim &nbsp;|&nbsp; LMB · shoot<br>
-    SHIFT · walk &nbsp;|&nbsp; SPACE · jump &nbsp;|&nbsp; CTRL · crouch<br>
+    SHIFT · walk &nbsp;|&nbsp; SPACE · jump &nbsp;|&nbsp; ALT/C · crouch<br>
     G · grenade &nbsp;|&nbsp; R · reload &nbsp;|&nbsp; 1/2 · switch weapon<br>
     TAB · scoreboard
   </div>

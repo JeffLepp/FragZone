@@ -13,6 +13,17 @@ const BOT_H          = 1.82;
 
 let _botCount = 0;
 
+// True if a bot standing at (x, z) would overlap map geometry. Exported so
+// the spawner can reject jittered positions that would pin a bot in a wall.
+export function botBlockedAt(x, z) {
+  for (const b of COLLISION_BOXES) {
+    if (x + BOT_R > b.minX && x - BOT_R < b.maxX &&
+        BOT_H     > b.minY && 0         < b.maxY &&
+        z + BOT_R > b.minZ && z - BOT_R < b.maxZ) return true;
+  }
+  return false;
+}
+
 export class Bot {
   constructor(scene, spawnPos, wallMeshes) {
     this._scene      = scene;
@@ -74,6 +85,12 @@ export class Bot {
       : null;
   }
 
+  // World-space chest point — blast falloff/LOS target (matches the +0.9
+  // chest offset the server uses for explosion damage on real players).
+  chestPos() {
+    return new THREE.Vector3(this._pos.x, 0.9, this._pos.z);
+  }
+
   takeDamage(amount) {
     if (!this.alive) return;
     this._hp = Math.max(0, this._hp - amount);
@@ -121,16 +138,22 @@ export class Bot {
     this._hpGrp.lookAt(camera.position);
 
     this._shootCd -= dt;
-    if (this._shootCd <= 0 && dist < SHOOT_RANGE && playerAlive) {
+    if (this._shootCd <= 0 && playerAlive) {
       this._shootCd = SHOOT_INTERVAL * (0.8 + Math.random() * 0.4);
-      this._tryShotAt(playerPos, dist, onHitPlayer);
+      this._tryShotAt(playerPos, onHitPlayer);
     }
   }
 
-  _tryShotAt(playerPos, dist, onHitPlayer) {
-    const eye = new THREE.Vector3(this._pos.x, 1.4, this._pos.z);
-    const dir = new THREE.Vector3().subVectors(playerPos, eye).normalize();
-    const rc  = new THREE.Raycaster(eye, dir, 0, dist);
+  _tryShotAt(playerPos, onHitPlayer) {
+    // Range and LOS use the true 3D eye-to-eye distance — the horizontal
+    // distance undercounts when the player is up the tower, which used to cut
+    // the LOS ray short of the wall and let bots shoot through it.
+    const eye  = new THREE.Vector3(this._pos.x, 1.4, this._pos.z);
+    const dir  = new THREE.Vector3().subVectors(playerPos, eye);
+    const dist = dir.length();
+    if (dist >= SHOOT_RANGE) return;
+    dir.divideScalar(dist);
+    const rc = new THREE.Raycaster(eye, dir, 0, dist);
     if (rc.intersectObjects(this._wallMeshes, false).length > 0) return;
     if (Math.random() < ACCURACY) onHitPlayer(BOT_DAMAGE);
   }
@@ -145,11 +168,6 @@ export class Bot {
   }
 
   _blocked(x, z) {
-    for (const b of COLLISION_BOXES) {
-      if (x + BOT_R > b.minX && x - BOT_R < b.maxX &&
-          BOT_H     > b.minY && 0         < b.maxY &&
-          z + BOT_R > b.minZ && z - BOT_R < b.maxZ) return true;
-    }
-    return false;
+    return botBlockedAt(x, z);
   }
 }

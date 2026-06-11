@@ -4,11 +4,23 @@ export class Network {
     this._ws       = null;
     this._handlers = {};
     this._statusHandler = null;
+    this._retryTimer    = null;
     this.connected = false;
     this.id        = null;
   }
 
   connect(url) {
+    // Tear down any previous socket and pending retry so repeated connect()
+    // calls (e.g. clicking ENTER FRAG again after a failure) can't stack
+    // parallel reconnect loops that each emit their own 'open'.
+    clearTimeout(this._retryTimer);
+    this._retryTimer = null;
+    if (this._ws) {
+      this._ws.onopen = this._ws.onmessage = this._ws.onclose = this._ws.onerror = null;
+      try { this._ws.close(); } catch { /* already closed */ }
+      this.connected = false;
+    }
+
     this._emitStatus('connecting', { url });
     this._ws = new WebSocket(url);
 
@@ -28,7 +40,7 @@ export class Network {
       this.connected = false;
       this._emitStatus('closed', { url });
       // attempt reconnect after 3 s
-      setTimeout(() => {
+      this._retryTimer = setTimeout(() => {
         this._emitStatus('reconnecting', { url });
         this.connect(url);
       }, 3000);
