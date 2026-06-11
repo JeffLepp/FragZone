@@ -11,6 +11,117 @@ const SPAWN_POINTS = [
   [  0, 0, -22], [ 0, 0,  22],
 ];
 
+// Wall/crate AABBs — mirrors WALL_DEFS in client/src/map.js (the visual source
+// of truth; the client is deployed separately, so the data is hand-synced —
+// update both files together). Used for grenade bounces and explosion cover.
+const WALL_H = 3.2;
+function aabb(cx, cz, w, d, h = WALL_H, cy = h / 2) {
+  return {
+    minX: cx - w / 2, maxX: cx + w / 2,
+    minY: cy - h / 2, maxY: cy + h / 2,
+    minZ: cz - d / 2, maxZ: cz + d / 2,
+  };
+}
+const wallBox  = (cx, cz, w, d)         => aabb(cx, cz, w, d);
+const crateBox = (cx, cz, w = 2, d = 2) => aabb(cx, cz, w, d, 1.5, 0.75);
+
+// Mid skyscraper — mirrors towerDefs()/RAMPS/SURF_RAMPS in client/src/map.js
+// (same hand-sync rule as the rest of this list): hollow 22 m tower, N/S
+// doorways, a smooth ramp spiralling up the inner walls (2.5 laps, 21 m rise
+// over an 87 m run), a rooftop deck at y 21, and four steep surf ramps from
+// gaps in the parapet down to the floor. The client walks/rides the ramps as
+// true sloped surfaces; here they are approximated as overlapping thin slabs,
+// which is plenty for grenade bounces and explosion cover.
+const TOWER_H = 22, TOWER_TOP = 21, RAMP_W = 1.3;
+function towerBoxes() {
+  const boxes = [];
+  const B = (cx, cy, cz, w, h, d) => boxes.push(aabb(cx, cz, w, d, h, cy));
+
+  // Walls (pieces stopping at TOWER_TOP leave the surf gaps in the parapet)
+  for (const x of [-5, 5]) {
+    B(x, TOWER_TOP / 2,   0,      1, TOWER_TOP, 13);
+    B(x, TOWER_TOP + 0.5, -2.125, 1, 1,         8.75);
+    B(x, TOWER_TOP + 0.5,  5.875, 1, 1,         1.25);
+  }
+  B(-2.85, TOWER_H / 2,     -6, 3.3, TOWER_H,   1);
+  B( 2.85, TOWER_TOP / 2,   -6, 3.3, TOWER_TOP, 1);
+  B( 1.85, TOWER_TOP + 0.5, -6, 1.3, 1,         1);
+  B(0, (TOWER_H + 2.4) / 2, -6, 2.4, TOWER_H - 2.4, 1);
+  B(-2.85, TOWER_H / 2, 6, 3.3, TOWER_H, 1);
+  B( 2.85, TOWER_H / 2, 6, 3.3, TOWER_H, 1);
+  B(0, (TOWER_TOP + 2.4) / 2, 6, 2.4, TOWER_TOP - 2.4, 1);
+
+  // Ramp spiral (SW→NW→NE→SE→…, centerline inset RAMP_W/2 from the walls),
+  // approximated as a thin slab every 0.5 m of run at the local surface height.
+  const RX = 3.85, RZ = 4.85;
+  const segs = [
+    [-RX,  RZ,  0, -1, 2 * RZ],
+    [-RX, -RZ,  1,  0, 2 * RX],
+    [ RX, -RZ,  0,  1, 2 * RZ],
+    [ RX,  RZ, -1,  0, 2 * RX],
+  ];
+  const lap   = 2 * (2 * RX + 2 * RZ);
+  const total = 2.5 * lap;
+  const grade = TOWER_TOP / total, SLAB = 0.5;
+  for (let s = SLAB / 2; s < total; s += SLAB) {
+    let t = s % lap, seg = 0;
+    while (t > segs[seg][4]) { t -= segs[seg][4]; seg++; }
+    const [fx, fz, dx] = segs[seg];
+    const x = fx + segs[seg][2] * t, z = fz + segs[seg][3] * t;
+    const len = SLAB + 0.3;
+    B(x, s * grade - 0.175, z,
+      dx ? len : RAMP_W, 0.35, dx ? RAMP_W : len);
+  }
+
+  // Rooftop deck (open above the final climb, NE landing bridges the arrival)
+  B( 0.65, TOWER_TOP - 0.2,    0.75, 7.7, 0.4,  9.5);
+  B(-3.85, TOWER_TOP - 0.2,    2.0,  1.3, 0.4,  7.0);
+  B( 3.5,  TOWER_TOP - 0.175, -4.75, 2,   0.35, 1.5);
+
+  // Surf ramps — ~46° slabs from the parapet gaps, cut short of the floor
+  // (bottom edge hangs at y 4); one thin slab every 0.5 m of run at the local
+  // surface height. (x1, z1) is where the slope would meet the floor.
+  const SURF_W = 3, SURF_END = 4;
+  for (const [x0, z0, x1, z1] of [
+    [ 5.5,  3.75,  26,  3.75],   // E
+    [-5.5,  3.75, -26,  3.75],   // W
+    [ 3.5, -6.5,   3.5, -26 ],   // N
+    [ 0,    6.5,   0,    26 ],   // S
+  ]) {
+    const full = Math.hypot(x1 - x0, z1 - z0);
+    const ux   = (x1 - x0) / full, uz = (z1 - z0) / full;
+    const len  = full * (TOWER_TOP - SURF_END) / TOWER_TOP;
+    for (let s = 0.25; s < len; s += 0.5) {
+      B(x0 + ux * s, TOWER_TOP * (1 - s / full) - 0.175, z0 + uz * s,
+        ux ? 0.8 : SURF_W, 0.35, ux ? SURF_W : 0.8);
+    }
+  }
+  return boxes;
+}
+
+const COLLISION_BOXES = [
+  // Outer boundary
+  wallBox(0, -30, 62, 1), wallBox(0, 30, 62, 1),
+  wallBox(-30, 0, 1, 62), wallBox(30, 0, 1, 62),
+  // Corner bunkers (NW, NE, SW, SE)
+  wallBox(-24, -22, 1, 8), wallBox(-20, -18, 8, 1),
+  wallBox( 24, -22, 1, 8), wallBox( 20, -18, 8, 1),
+  wallBox(-24,  22, 1, 8), wallBox(-20,  18, 8, 1),
+  wallBox( 24,  22, 1, 8), wallBox( 20,  18, 8, 1),
+  // Mid skyscraper
+  ...towerBoxes(),
+  // Side barriers
+  wallBox(-15, 0, 1, 18), wallBox(15, 0, 1, 18),
+  // Cover crates
+  crateBox( -9, -12), crateBox(  9, -12),
+  crateBox( -9,  12), crateBox(  9,  12),
+  crateBox(  0, -20), crateBox(  0,  20),
+  crateBox(-22, 0, 2, 4), crateBox(22, 0, 2, 4),
+  crateBox( -9, 0), crateBox(9, 0),
+  crateBox(-14, -16), crateBox(14, -16),
+  crateBox(-14,  16), crateBox(14,  16),
+];
+
 // Hitscan weapons a client may name in a 'shoot' message. Grenade damage is
 // computed server-side in the explosion loop and must not be listed here —
 // the damage floor in applyDamage would turn a 0-damage 'shoot' into 1 hp.
@@ -69,6 +180,42 @@ function vec3(v) {
 
 function dist3(a, b) {
   return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+}
+
+const NADE_R = 0.12; // matches the client's grenade mesh radius
+
+function grenadeBlocked(x, y, z) {
+  for (const b of COLLISION_BOXES) {
+    if (x + NADE_R > b.minX && x - NADE_R < b.maxX &&
+        y + NADE_R > b.minY && y - NADE_R < b.maxY &&
+        z + NADE_R > b.minZ && z - NADE_R < b.maxZ) return true;
+  }
+  return false;
+}
+
+// True if the straight segment a→b passes through any wall or crate.
+// Slab-method segment/AABB intersection.
+function losBlocked(a, b) {
+  const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+  for (const box of COLLISION_BOXES) {
+    const mins = [box.minX, box.minY, box.minZ];
+    const maxs = [box.maxX, box.maxY, box.maxZ];
+    let tmin = 0, tmax = 1, hit = true;
+    for (let i = 0; i < 3; i++) {
+      if (Math.abs(d[i]) < 1e-9) {
+        if (a[i] < mins[i] || a[i] > maxs[i]) { hit = false; break; }
+      } else {
+        let t1 = (mins[i] - a[i]) / d[i];
+        let t2 = (maxs[i] - a[i]) / d[i];
+        if (t1 > t2) { const t = t1; t1 = t2; t2 = t; }
+        tmin = Math.max(tmin, t1);
+        tmax = Math.min(tmax, t2);
+        if (tmin > tmax) { hit = false; break; }
+      }
+    }
+    if (hit) return true;
+  }
+  return false;
 }
 
 function pickSpawn() {
@@ -314,7 +461,10 @@ wss.on('connection', ws => {
     players.delete(ws);
   });
 
-  ws.on('error', () => players.delete(ws));
+  // 'close' always follows 'error', so removal (and the playerLeft broadcast)
+  // happens there — deleting here too would skip the broadcast and leave a
+  // frozen ghost avatar on every client. Listener kept so ws doesn't throw.
+  ws.on('error', () => {});
 });
 
 // ---------------------------------------------------------------------------
@@ -333,9 +483,37 @@ setInterval(() => {
   const exploded = [];
   for (const [id, g] of grenades) {
     g.vel[1] -= GRENADE_GRAV * dt;
-    g.pos[0] += g.vel[0] * dt;
-    g.pos[1] += g.vel[1] * dt;
-    g.pos[2] += g.vel[2] * dt;
+
+    // Move axis-by-axis so a wall hit on one axis still lets the grenade
+    // slide/bounce along the others (same scheme the client uses for players).
+    // A throw released while hugging a wall can spawn already overlapping a
+    // box — let it fly freely until it's clear, or it would jitter in place.
+    const embedded = grenadeBlocked(g.pos[0], g.pos[1], g.pos[2]);
+
+    const nx = g.pos[0] + g.vel[0] * dt;
+    if (!embedded && grenadeBlocked(nx, g.pos[1], g.pos[2])) g.vel[0] *= -0.45;
+    else g.pos[0] = nx;
+
+    const nz = g.pos[2] + g.vel[2] * dt;
+    if (!embedded && grenadeBlocked(g.pos[0], g.pos[1], nz)) g.vel[2] *= -0.45;
+    else g.pos[2] = nz;
+
+    const ny = g.pos[1] + g.vel[1] * dt;
+    if (!embedded && grenadeBlocked(g.pos[0], ny, g.pos[2])) {
+      // Crate top (falling) bounces like the floor; underside just reflects.
+      if (g.vel[1] < 0) {
+        if (Math.abs(g.vel[1]) > 1.5) {
+          g.vel[1] = Math.abs(g.vel[1]) * 0.38;
+          g.vel[0] *= 0.72; g.vel[2] *= 0.72;
+        } else {
+          g.vel[1] = 0; g.vel[0] *= 0.9; g.vel[2] *= 0.9;
+        }
+      } else {
+        g.vel[1] *= -0.38;
+      }
+    } else {
+      g.pos[1] = ny;
+    }
 
     if (g.pos[1] < 0.1 && g.vel[1] < 0) {
       g.pos[1] = 0.1;
@@ -359,6 +537,9 @@ setInterval(() => {
         const dz = p.pos[2] - g.pos[2];
         const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
         if (dist < EXPL_RADIUS) {
+          // Cover blocks the blast: no damage if a wall/crate sits between the
+          // grenade and the player's chest.
+          if (losBlocked(g.pos, [p.pos[0], p.pos[1] + 0.9, p.pos[2]])) continue;
           const f   = 1 - dist / EXPL_RADIUS;
           const dmg = Math.round(EXPL_MAX_DMG * f * f);
           if (dmg > 0 && ownerWs) applyDamage(ownerWs, p.id, dmg, 'grenade');
