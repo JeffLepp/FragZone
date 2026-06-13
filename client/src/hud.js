@@ -60,14 +60,51 @@ export class HUD {
     letter-spacing: 1px;
   }
 
-  /* ── lock hint ── */
-  #fz-lock {
-    position: fixed; top: 50%; left: 50%;
-    transform: translate(-50%, -50%);
-    color: #aaa; font-size: 13px; letter-spacing: 2px;
-    display: none; z-index: 50; pointer-events: none;
-    text-align: center;
+  /* ── pause (escape) menu ── */
+  #fz-pause {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.6);
+    display: none; align-items: center; justify-content: center;
+    z-index: 95; pointer-events: all; /* above death screen (90), below main menu (100) */
   }
+  #fz-pause .panel {
+    background: rgba(0,0,0,0.88);
+    border: 1px solid #444;
+    padding: 28px 36px; min-width: 320px;
+    color: #e8d8b0; text-align: center;
+  }
+  #fz-pause h3 {
+    letter-spacing: 6px; font-size: 18px;
+    color: #ff8c00; text-transform: uppercase;
+    margin-bottom: 24px;
+  }
+  #fz-pause label {
+    display: block; font-size: 11px; letter-spacing: 2px;
+    color: #888; margin-bottom: 8px; text-transform: uppercase;
+  }
+  #fz-pause label span { color: #e8d8b0; }
+  #fz-pause input[type=range] {
+    -webkit-appearance: none; appearance: none;
+    width: 100%; height: 3px; background: #333;
+    outline: none; margin-bottom: 24px; cursor: pointer;
+  }
+  #fz-pause input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 14px; height: 14px; background: #ff8c00;
+    cursor: pointer;
+  }
+  #fz-pause input[type=range]::-moz-range-thumb {
+    width: 14px; height: 14px; background: #ff8c00;
+    border: none; border-radius: 0; cursor: pointer;
+  }
+  #fz-pause button {
+    background: #ff8c00; border: none; color: #000;
+    padding: 10px 32px; font-size: 13px; font-family: inherit;
+    letter-spacing: 3px; text-transform: uppercase;
+    cursor: pointer; font-weight: bold;
+    transition: background 0.15s;
+  }
+  #fz-pause button:hover { background: #ffa733; }
 
   /* ── crosshair ── */
   #fz-xhair {
@@ -232,12 +269,19 @@ export class HUD {
     WASD · move &nbsp;|&nbsp; MOUSE · aim &nbsp;|&nbsp; LMB · shoot<br>
     SHIFT · walk &nbsp;|&nbsp; SPACE · jump &nbsp;|&nbsp; ALT/C · crouch<br>
     G · grenade &nbsp;|&nbsp; R · reload &nbsp;|&nbsp; 1/2 · switch weapon<br>
-    TAB · scoreboard
+    TAB · scoreboard &nbsp;|&nbsp; ESC · settings
   </div>
 </div>
 
-<!-- Pointer-lock hint -->
-<div id="fz-lock">CLICK TO RESUME</div>
+<!-- Pause (escape) menu -->
+<div id="fz-pause">
+  <div class="panel">
+    <h3>Paused</h3>
+    <label>Mouse Sensitivity <span id="fz-sens-val">1.00</span></label>
+    <input id="fz-sens" type="range" min="0.1" max="3" step="0.05" value="1" />
+    <button id="fz-resume">Resume</button>
+  </div>
+</div>
 
 <!-- Crosshair -->
 <div id="fz-xhair" style="display:none">
@@ -306,7 +350,10 @@ export class HUD {
     // Cache refs
     this._el = {
       menu:       document.getElementById('fz-menu'),
-      lock:       document.getElementById('fz-lock'),
+      pause:      document.getElementById('fz-pause'),
+      sens:       document.getElementById('fz-sens'),
+      sensVal:    document.getElementById('fz-sens-val'),
+      resumeBtn:  document.getElementById('fz-resume'),
       xhair:      document.getElementById('fz-xhair'),
       hit:        document.getElementById('fz-hit'),
       kconfirm:   document.getElementById('fz-kconfirm'),
@@ -362,8 +409,26 @@ export class HUD {
 
   setLocalId(id) { this._localId = id; }
 
-  showLockHint(show) {
-    this._el.lock.style.display = show ? 'block' : 'none';
+  showPauseMenu(show) {
+    this._el.pause.style.display = show ? 'flex' : 'none';
+  }
+
+  // Sensitivity slider: callback fires with the numeric value on every change.
+  onSensitivity(callback) {
+    this._el.sens.addEventListener('input', () => {
+      const v = parseFloat(this._el.sens.value);
+      this._el.sensVal.textContent = v.toFixed(2);
+      callback(v);
+    });
+  }
+
+  setSensitivity(v) {
+    this._el.sens.value = v;
+    this._el.sensVal.textContent = v.toFixed(2);
+  }
+
+  onResume(callback) {
+    this._el.resumeBtn.addEventListener('click', callback);
   }
 
   // ── per-frame update ──

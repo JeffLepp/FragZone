@@ -73,14 +73,35 @@ let playerName = '';
 const localPlayer = new LocalPlayer({ camera, scene, wallMeshes, remotePlayers, network, hud, audio, bots });
 
 // ── Pointer lock ──────────────────────────────────────────────────────────────
+// unadjustedMovement bypasses OS pointer acceleration ("Enhance pointer
+// precision" on Windows), which otherwise causes large erratic jumps in
+// movementX/Y on some machines. Falls back if the platform doesn't support it.
+function lockPointer() {
+  const el = renderer.domElement;
+  const p = el.requestPointerLock({ unadjustedMovement: true });
+  // Retry without options where unsupported; the retry can also reject
+  // (e.g. re-locking too soon after Escape) — swallow it, the user just clicks again.
+  if (p && p.catch) p.catch(() => { const r = el.requestPointerLock(); if (r && r.catch) r.catch(() => {}); });
+}
+
 renderer.domElement.addEventListener('click', () => {
-  if (!document.pointerLockElement) renderer.domElement.requestPointerLock();
+  if (!document.pointerLockElement) lockPointer();
 });
 document.addEventListener('pointerlockchange', () => {
   const locked = !!document.pointerLockElement;
-  hud.showLockHint(!locked && gameStarted);
+  hud.showPauseMenu(!locked && gameStarted);
   document.body.classList.toggle('locked', locked);
 });
+
+// ── Settings (escape menu) ────────────────────────────────────────────────────
+const savedSens = Math.min(3, Math.max(0.1, parseFloat(localStorage.getItem('fz-sens')) || 1));
+localPlayer.setSensitivity(savedSens);
+hud.setSensitivity(savedSens);
+hud.onSensitivity(v => {
+  localPlayer.setSensitivity(v);
+  localStorage.setItem('fz-sens', v);
+});
+hud.onResume(lockPointer);
 
 // ── Explosion visual ──────────────────────────────────────────────────────────
 const explosionEffects = [];
@@ -297,7 +318,7 @@ hud.onPlay(name => {
   pendingJoinName = name;
   hud.setMenuStatus('Connecting...', true);
   network.connect(WS_URL); // 'open' status handler sends the join
-  renderer.domElement.requestPointerLock();
+  lockPointer();
 });
 
 // ── Bot mode ──────────────────────────────────────────────────────────────────
