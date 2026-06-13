@@ -28,11 +28,6 @@ From codebase review on 2026-06-10. Ordered by impact.
 - [x] **Stale muzzle flash on weapon switch.**
   `player.js:563-572`: switching weapons during the 45 ms flash window hides the *new* weapon's flash, leaving the old weapon's flash visible until it's fired again. Hide both flashes on switch, or store the flash that was triggered.
 
-## Cheating surface (server trusts the client too much)
-
-- [x] **`shoot` has no rate limit, range, or LOS check** (`server/index.js:222-226`). A modified client can spam `shoot` at any `targetId` anywhere for instant cross-map kills. Minimum fix: per-player cooldown derived from weapon RPM + max-distance check using server positions.
-- [x] **`throwGrenade` has no inventory or rate limit** (`server/index.js:227-235`); grenade count only lives on the client. Also `msg.pos`/`msg.vel` aren't validated for finiteness — NaN velocities propagate into physics and get broadcast. Track grenade count server-side and validate arrays like `move` does.
-- [ ] **Ammo/reload is fully client-side** — server can't validate fire rate without tracking ammo. Acceptable for prototype; revisit before public play.
 
 ## Resource leaks
 

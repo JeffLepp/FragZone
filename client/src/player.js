@@ -22,6 +22,7 @@ const CROUCH_H      = 1.1;
 const EYE_H         = 1.62;
 const CROUCH_EYE_H  = 0.92;
 const NET_HZ        = 20;
+const BASE_SENS     = 0.00175; // rad per mouse count at sensitivity 1.0
 
 // Keys the game owns while the pointer is locked. Crouch is Alt, which the
 // browser also uses — Alt alone focuses the menu bar, Alt+D the address bar,
@@ -112,7 +113,7 @@ export class LocalPlayer {
     this._dy = 0;
     this._lmbDown    = false;
     this._lmbPrev    = false;
-    this._sensitivity = 0.00175;
+    this._sensitivity = BASE_SENS;
 
     // Server grenade visuals
     this._grenObjs = new Map();
@@ -176,6 +177,11 @@ export class LocalPlayer {
     document.addEventListener('pointerlockchange', () => {
       if (!document.pointerLockElement) releaseInput();
     });
+  }
+
+  // mult is the user-facing sensitivity value (1.0 = default)
+  setSensitivity(mult) {
+    this._sensitivity = BASE_SENS * mult;
   }
 
   // ─── Lifecycle ─────────────────────────────────────────────────────────────
