@@ -157,11 +157,34 @@ const PICKUP_DEFS = [
   { id: 'am4', kind: 'ammo',   pos: [  9, 0.5,   6] },
 ];
 
+// Bots are now server-authoritative and shared by every player (mirrors the
+// old client-only logic in client/src/bot.js, ported here). Bot mode is a
+// single game-wide toggle — any player pressing B flips it for the whole match.
+const BOT_HP_MAX      = 100;
+const BOT_DAMAGE      = 10;
+const BOT_R           = 0.38;
+const BOT_H           = 1.82;
+const BOT_CHASE_SPEED = 3.2;
+const BOT_STOP_DIST   = 5.5;
+const BOT_SHOOT_RANGE = 24;
+const BOT_SHOOT_INT   = 1.0;  // seconds between shot attempts
+const BOT_ACCURACY    = 0.48; // probability of dealing damage per attempt with LOS
+const BOT_WAVE_BREAK  = 2.5;  // seconds between clearing a wave and the next spawn
+// Matches client/src/map.js MAP_BOUNDS — keeps bots inside the arena.
+const BOT_BOUNDS      = { minX: -29.4, maxX: 29.4, minZ: -29.4, maxZ: 29.4 };
+
 const players     = new Map(); // ws -> player
 const grenades    = new Map(); // id -> grenade
 let grenadeSeq    = 0;
 let tickCount     = 0;
 const pickups     = PICKUP_DEFS.map(d => ({ ...d, active: true, respawnAt: 0 }));
+
+const bots        = new Map(); // id -> bot
+let botMode       = false;
+let botWaveSize   = 0;
+let botWaveTimer  = 0; // countdown between clearing a wave and the next spawn
+let botSeq        = 0;
+let botNameSeq    = 0;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -253,6 +276,10 @@ function serialize(p) {
   };
 }
 
+function serializeBot(b) {
+  return { id: b.id, name: b.name, pos: b.pos, hp: b.hp, alive: b.alive };
+}
+
 function scores() {
   const s = {};
   for (const p of players.values()) {
@@ -320,6 +347,177 @@ function scheduleRespawn(victimWs, victim) {
   }, RESPAWN_MS);
 }
 
+// Damage dealt to a player by a bot. Like applyDamage, but the killer is a bot
+// (no player attacker): no kill credit, and the death is reported with a null
+// killerId so the client kill feed reads "BOTx killed <player>".
+function applyBotDamage(victim, damage, botName) {
+  if (!victim.alive) return;
+  const victimWs = wsOfId(victim.id);
+  if (!victimWs) return;
+
+  let actual = damage;
+  if (victim.armor > 0) {
+    const absorbed = Math.min(victim.armor, damage * 0.5);
+    victim.armor   = Math.max(0, victim.armor - absorbed * 2);
+    actual         = damage - absorbed;
+  }
+  actual = Math.max(1, Math.round(actual));
+  victim.health -= actual;
+
+  const killed = victim.health <= 0;
+  if (killed) victim.health = 0;
+
+  send(victimWs, { type: 'hit', victimId: victim.id, killerId: null, damage: actual, killed });
+  if (!killed) return;
+
+  victim.alive = false;
+  victim.deaths++;
+  broadcast({
+    type: 'killed',
+    killerId: null, killerName: botName,
+    victimId: victim.id, victimName: victim.name,
+    weapon: 'ak',
+  });
+  scheduleRespawn(victimWs, victim);
+}
+
+// ---------------------------------------------------------------------------
+// Bots (server-authoritative, shared by all players)
+// ---------------------------------------------------------------------------
+
+// True if a bot standing at (x, z) would overlap map geometry — mirrors
+// botBlockedAt in client/src/bot.js.
+function botBlockedAt(x, z) {
+  for (const b of COLLISION_BOXES) {
+    if (x + BOT_R > b.minX && x - BOT_R < b.maxX &&
+        BOT_H     > b.minY && 0         < b.maxY &&
+        z + BOT_R > b.minZ && z - BOT_R < b.maxZ) return true;
+  }
+  return false;
+}
+
+function spawnBotWave(count) {
+  const alive = [...players.values()].filter(p => p.alive);
+  // Distance of a spawn point to the nearest player; spawn waves farthest out
+  // so bots have to close in (matches the old client spawner's intent).
+  const nearestPlayer = sp => alive.length
+    ? Math.min(...alive.map(p => Math.hypot(sp[0] - p.pos[0], sp[2] - p.pos[2])))
+    : 0;
+  const byDist = [...SPAWN_POINTS].sort((a, b) => nearestPlayer(b) - nearestPlayer(a));
+
+  for (let i = 0; i < count; i++) {
+    const sp = byDist[i % byDist.length];
+    // Jitter (widening as points are reused) so stacked bots don't overlap,
+    // retrying when a jittered point lands inside geometry; the bare spawn
+    // point is always clear.
+    const spread = 2 + Math.floor(i / byDist.length);
+    let x = sp[0], z = sp[2];
+    for (let tries = 0; tries < 10; tries++) {
+      const jx = sp[0] + (Math.random() - 0.5) * spread;
+      const jz = sp[2] + (Math.random() - 0.5) * spread;
+      if (!botBlockedAt(jx, jz)) { x = jx; z = jz; break; }
+    }
+    const id = `bot${botSeq++}`;
+    bots.set(id, {
+      id, name: `BOT${++botNameSeq}`,
+      pos: [x, 0, z], hp: BOT_HP_MAX, alive: true,
+      shootCd: 0.4 + Math.random() * 0.6,
+    });
+  }
+}
+
+function setBotMode(on) {
+  botMode      = on;
+  botWaveTimer = 0;
+  if (on) {
+    botWaveSize = 1;
+    spawnBotWave(botWaveSize);
+    broadcast({ type: 'botWave', size: botWaveSize, first: true });
+  } else {
+    bots.clear();
+    botWaveSize = 0;
+    broadcast({ type: 'botMode', on: false });
+  }
+}
+
+function botSlide(bot, dx, dz) {
+  const testX = bot.pos[0] + dx;
+  if (!botBlockedAt(testX, bot.pos[2])) bot.pos[0] = testX;
+  const testZ = bot.pos[2] + dz;
+  if (!botBlockedAt(bot.pos[0], testZ)) bot.pos[2] = testZ;
+  bot.pos[0] = Math.max(BOT_BOUNDS.minX + BOT_R, Math.min(BOT_BOUNDS.maxX - BOT_R, bot.pos[0]));
+  bot.pos[2] = Math.max(BOT_BOUNDS.minZ + BOT_R, Math.min(BOT_BOUNDS.maxZ - BOT_R, bot.pos[2]));
+}
+
+function botTryShoot(bot, target) {
+  // Eye-to-eye range/LOS like the old client AI: undercounting with the
+  // horizontal distance let bots shoot through walls when a target was up the
+  // tower. Crouching lowers the target's eye height (mirrors player.js).
+  const eye   = [bot.pos[0], 1.4, bot.pos[2]];
+  const tEye  = [target.pos[0], target.pos[1] + (target.crouching ? 0.92 : 1.62), target.pos[2]];
+  const dist  = dist3(eye, tEye);
+  if (dist >= BOT_SHOOT_RANGE) return;
+  if (losBlocked(eye, tEye)) return;
+  if (Math.random() < BOT_ACCURACY) applyBotDamage(target, BOT_DAMAGE, bot.name);
+}
+
+// Award a bot kill to a player (hitscan or grenade) and broadcast it.
+function killBot(bot, killer, weapon) {
+  bot.hp    = 0;
+  bot.alive = false;
+  bots.delete(bot.id);
+  if (killer) killer.kills++;
+  broadcast({
+    type: 'botKilled',
+    botId: bot.id, botName: bot.name,
+    killerId:   killer ? killer.id   : null,
+    killerName: killer ? killer.name : 'BOT',
+    weapon,
+  });
+}
+
+function updateBots(dt) {
+  if (botMode) {
+    const alive = [...players.values()].filter(p => p.alive);
+    for (const bot of bots.values()) {
+      if (!bot.alive) continue;
+      // Chase the nearest living player and shoot when in range.
+      let target = null, best = Infinity;
+      for (const p of alive) {
+        const d = Math.hypot(p.pos[0] - bot.pos[0], p.pos[2] - bot.pos[2]);
+        if (d < best) { best = d; target = p; }
+      }
+      if (target) {
+        const dx = target.pos[0] - bot.pos[0];
+        const dz = target.pos[2] - bot.pos[2];
+        if (best > BOT_STOP_DIST && best > 1e-4) {
+          botSlide(bot, dx / best * BOT_CHASE_SPEED * dt, dz / best * BOT_CHASE_SPEED * dt);
+        }
+        bot.shootCd -= dt;
+        if (bot.shootCd <= 0) {
+          bot.shootCd = BOT_SHOOT_INT * (0.8 + Math.random() * 0.4);
+          botTryShoot(bot, target);
+        }
+      }
+    }
+  }
+
+  // Wave progression: once a wave is cleared, grow it (doubling up to 16, then
+  // +log2 so the count doesn't explode) and respawn after a short breather.
+  if (botMode && bots.size === 0) {
+    if (botWaveTimer <= 0) {
+      botWaveSize = botWaveSize < 16
+        ? botWaveSize * 2
+        : botWaveSize + Math.round(Math.log2(botWaveSize));
+      botWaveTimer = BOT_WAVE_BREAK;
+      broadcast({ type: 'botWave', size: botWaveSize, first: false });
+    } else {
+      botWaveTimer -= dt;
+      if (botWaveTimer <= 0) spawnBotWave(botWaveSize);
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // HTTP + WebSocket server
 // ---------------------------------------------------------------------------
@@ -364,6 +562,7 @@ wss.on('connection', ws => {
         players: [...players.values()].filter(p => p.id !== player.id).map(serialize),
         scores: scores(),
         pickups: pickups.map(p => ({ id: p.id, kind: p.kind, pos: p.pos, active: p.active })),
+        bots: [...bots.values()].map(serializeBot),
       });
       broadcast({ type: 'playerJoined', ...serialize(player) }, ws);
       return;
@@ -403,36 +602,24 @@ wss.on('connection', ws => {
         applyDamage(ws, msg.targetId, wd.damage, msg.weapon);
         break;
       }
-      // Client-side bots are invisible to the server, so bot hits and kills are
-      // reported here to keep server health/alive state in sync (the health-pack
-      // `health >= 100` check and damage math use server health) and to let the
-      // server drive the respawn (position included) like any other death.
-      case 'botDamage': {
-        if (!player.alive) break;
-        const dmg = Number(msg.damage);
-        if (!Number.isFinite(dmg) || dmg <= 0 || dmg > 100) break;
-        // Floor at 1 hp — death is only ever signalled via 'botDeath' so a
-        // damage race can't kill the player without a respawn being scheduled.
-        player.health = Math.max(1, player.health - Math.round(dmg));
+      // Hitscan against a bot. Validated like 'shoot' (rate limit + range using
+      // server positions); the client only raycasts to pick which bot it hit.
+      case 'shootBot': {
+        const wd = WEAPON_DATA[msg.weapon];
+        if (!player.alive || !wd) break;
+        const now = Date.now();
+        if (now - player.lastShot < (60000 / wd.rpm) * 0.7) break;
+        const bot = bots.get(msg.botId);
+        if (!bot || !bot.alive) break;
+        if (dist3(player.pos, bot.pos) > MAX_SHOT_RANGE) break;
+        player.lastShot = now;
+        bot.hp -= Math.max(1, Math.round(wd.damage));
+        if (bot.hp <= 0) killBot(bot, player, msg.weapon);
         break;
       }
-      case 'botDeath': {
-        if (!player.alive) break;
-        player.alive  = false;
-        player.health = 0;
-        player.deaths++;
-        // Show the death in everyone else's kill feed. The reporter is skipped:
-        // it already showed its own entry immediately, and the bot only exists
-        // on that client anyway. Sanitize the name like 'join' does — it ends
-        // up in innerHTML on other clients.
-        const botName = String(msg.botName || 'BOT').replace(/[<>&"]/g, '').slice(0, 16) || 'BOT';
-        broadcast({
-          type: 'killed',
-          killerId: null, killerName: botName,
-          victimId: player.id, victimName: player.name,
-          weapon: 'ak',
-        }, ws);
-        scheduleRespawn(ws, player);
+      // Any player can flip the game-wide bot mode (the B key).
+      case 'toggleBots': {
+        setBotMode(!botMode);
         break;
       }
       case 'throwGrenade': {
@@ -478,6 +665,9 @@ setInterval(() => {
   const dt  = Math.min((now - lastTick) / 1000, 0.1);
   lastTick  = now;
   tickCount++;
+
+  // Bot AI + wave progression
+  updateBots(dt);
 
   // Grenade physics
   const exploded = [];
@@ -546,6 +736,23 @@ setInterval(() => {
           hitPlayers.push(p.id);
         }
       }
+      // Same blast against bots (chest at y 0.9, same falloff + cover check).
+      // Deleting the current entry mid-iteration is safe for a Map.
+      const owner = ownerWs ? players.get(ownerWs) : null;
+      for (const bot of bots.values()) {
+        if (!bot.alive) continue;
+        const dx = bot.pos[0] - g.pos[0];
+        const dy = 0.9 - g.pos[1];
+        const dz = bot.pos[2] - g.pos[2];
+        const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+        if (dist >= EXPL_RADIUS) continue;
+        if (losBlocked(g.pos, [bot.pos[0], 0.9, bot.pos[2]])) continue;
+        const f   = 1 - dist / EXPL_RADIUS;
+        const dmg = Math.round(EXPL_MAX_DMG * f * f);
+        if (dmg <= 0) continue;
+        bot.hp -= dmg;
+        if (bot.hp <= 0) killBot(bot, owner, 'grenade');
+      }
       broadcast({ type: 'explosion', id: g.id, pos: [...g.pos], hitPlayers });
     }
   }
@@ -591,7 +798,12 @@ setInterval(() => {
   }
 
   if (tickCount % 2 === 0) {
-    broadcast({ type: 'stateUpdate', players: [...players.values()].map(serialize), scores: scores() });
+    broadcast({
+      type: 'stateUpdate',
+      players: [...players.values()].map(serialize),
+      bots: [...bots.values()].map(serializeBot),
+      scores: scores(),
+    });
   }
 }, 1000 / TICK_RATE);
 

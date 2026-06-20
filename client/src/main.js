@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { createMap, SPAWN_POINTS } from './map.js';
-import { Bot, botBlockedAt } from './bot.js';
+import { createMap } from './map.js';
+import { Bot } from './bot.js';
 import { LocalPlayer } from './player.js';
 import { RemotePlayer } from './remote.js';
 import { Network } from './network.js';
@@ -67,8 +67,7 @@ const network = new Network();
 const pickups = new PickupManager(scene);
 
 const remotePlayers = new Map(); // id -> RemotePlayer
-const bots = [];                  // client-side bots
-let playerName = '';
+const bots = new Map();           // id -> Bot (server-authoritative, shared)
 
 const localPlayer = new LocalPlayer({ camera, scene, wallMeshes, remotePlayers, network, hud, audio, bots });
 
@@ -175,6 +174,8 @@ network.on('init', msg => {
   // world snapshot — drop everything left over from the old session.
   remotePlayers.forEach(rp => rp.dispose());
   remotePlayers.clear();
+  bots.forEach(b => b.dispose());
+  bots.clear();
   localPlayer.updateServerGrenades([]);
 
   localPlayer.init(msg.id, msg.spawnPos);
@@ -187,6 +188,9 @@ network.on('init', msg => {
     if (!remotePlayers.has(p.id)) {
       remotePlayers.set(p.id, new RemotePlayer(scene, p));
     }
+  });
+  (msg.bots || []).forEach(b => {
+    if (!bots.has(b.id)) bots.set(b.id, new Bot(scene, b));
   });
   if (msg.scores) hud.updateScoreboard(msg.scores);
   if (msg.pickups) pickups.setAll(msg.pickups);
@@ -225,6 +229,20 @@ network.on('stateUpdate', msg => {
       remotePlayers.delete(id);
     }
   }
+
+  // Bots are diffed the same way: create/update from the snapshot, prune any
+  // the server no longer reports (cleared wave, bot mode off, missed kill).
+  const seenBots = new Set();
+  (msg.bots || []).forEach(b => {
+    seenBots.add(b.id);
+    let bv = bots.get(b.id);
+    if (!bv) { bv = new Bot(scene, b); bots.set(b.id, bv); }
+    bv.updateState(b);
+  });
+  for (const [id, bv] of bots) {
+    if (!seenBots.has(id)) { bv.dispose(); bots.delete(id); }
+  }
+
   if (msg.scores) hud.updateScoreboard(msg.scores);
 });
 
@@ -248,6 +266,31 @@ network.on('killed', msg => {
   }
 });
 
+// A new bot wave spawned. `first` is the opening wave when bot mode is toggled
+// on; later waves announce the growing count as each is cleared.
+network.on('botWave', msg => {
+  hud.showNotification(msg.first
+    ? 'Bot mode ON — clear waves to face double the bots (B to stop)'
+    : `Wave cleared — ${msg.size} bots incoming`);
+});
+
+network.on('botMode', msg => {
+  if (!msg.on) hud.showNotification('Bot mode OFF');
+});
+
+// A bot was killed by a player. Remove it immediately (don't wait for the next
+// stateUpdate prune) and show the kill feed / confirm.
+network.on('botKilled', msg => {
+  const bv = bots.get(msg.botId);
+  if (bv) { bv.dispose(); bots.delete(msg.botId); }
+  const isMine = msg.killerId === network.id;
+  hud.addKillFeedEntry(msg.killerName, msg.botName, msg.weapon, isMine);
+  if (isMine) {
+    audio.playKillConfirm();
+    hud.showKillConfirm();
+  }
+});
+
 network.on('grenadeSpawned', msg => {
   localPlayer.addGrenade(msg.id, msg.pos);
 });
@@ -256,34 +299,12 @@ network.on('grenadeUpdate', msg => {
   localPlayer.updateServerGrenades(msg.grenades);
 });
 
-// Keep in sync with server EXPL_RADIUS / EXPL_MAX_DMG.
-const EXPL_RADIUS  = 7;
-const EXPL_MAX_DMG = 98;
-
 network.on('explosion', msg => {
   audio.playExplosion();
   spawnExplosion(msg.pos);
   localPlayer.removeGrenade(msg.id);
-
-  // Client-side bots are invisible to the server's explosion loop, so mirror
-  // its blast damage here (same quadratic falloff + cover check). Bots only
-  // exist in our world, so every kill is credited to us.
-  const blast = new THREE.Vector3(...msg.pos);
-  for (const bot of bots) {
-    if (!bot.alive) continue;
-    const chest = bot.chestPos();
-    const dist  = blast.distanceTo(chest);
-    if (dist >= EXPL_RADIUS) continue;
-    const dir = chest.sub(blast).normalize();
-    if (new THREE.Raycaster(blast, dir, 0, dist).intersectObjects(wallMeshes, false).length > 0) continue;
-    const f = 1 - dist / EXPL_RADIUS;
-    bot.takeDamage(Math.round(EXPL_MAX_DMG * f * f));
-    if (!bot.alive) {
-      audio.playKillConfirm();
-      hud.showKillConfirm();
-      hud.addKillFeedEntry('YOU', bot.name, 'grenade', true);
-    }
-  }
+  // Blast damage to players and bots is resolved server-side (see the
+  // explosion loop in server/index.js); bot deaths arrive via 'botKilled'.
 });
 
 network.on('respawn', msg => {
@@ -314,7 +335,6 @@ network.on('pickup', msg => {
 const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8080';
 
 hud.onPlay(name => {
-  playerName = name;
   pendingJoinName = name;
   hud.setMenuStatus('Connecting...', true);
   network.connect(WS_URL); // 'open' status handler sends the join
@@ -322,49 +342,12 @@ hud.onPlay(name => {
 });
 
 // ── Bot mode ──────────────────────────────────────────────────────────────────
-// B toggles bot mode: waves that double in size each time one is cleared
-// (1 → 2 → 4 → 8 …). Bots are client-side only.
-let botMode       = false;
-let botWaveSize   = 0;
-let nextWaveTimer = 0; // countdown between clearing a wave and the next spawn
-
-function spawnBotWave(count) {
-  const pp = localPlayer.position;
-  // Fill spawn points starting with those farthest from the player, cycling
-  // with a little jitter so stacked bots don't overlap perfectly.
-  const byDist = [...SPAWN_POINTS].sort((a, b) =>
-    Math.hypot(b[0] - pp.x, b[2] - pp.z) - Math.hypot(a[0] - pp.x, a[2] - pp.z));
-  for (let i = 0; i < count; i++) {
-    const sp = byDist[i % byDist.length];
-    // Some spawn points sit close to bunker walls/crates, so a jittered
-    // position can land inside geometry and pin the bot there. Retry the
-    // jitter (widening as the wave reuses points) and fall back to the bare
-    // spawn point, which is always clear.
-    const spread = 2 + Math.floor(i / byDist.length);
-    let x = sp[0], z = sp[2];
-    for (let tries = 0; tries < 10; tries++) {
-      const jx = sp[0] + (Math.random() - 0.5) * spread;
-      const jz = sp[2] + (Math.random() - 0.5) * spread;
-      if (!botBlockedAt(jx, jz)) { x = jx; z = jz; break; }
-    }
-    bots.push(new Bot(scene, [x, 0, z], wallMeshes));
-  }
-}
-
+// Bots are now server-authoritative and shared by everyone in the match. B
+// asks the server to toggle the game-wide bot mode; the server spawns/runs the
+// waves and broadcasts them, so all players see (and get shot at by) the same
+// bots. Waves double in size each time one is cleared (1 → 2 → 4 → 8 …).
 window.addEventListener('keydown', e => {
-  if (e.code === 'KeyB' && gameStarted) {
-    botMode = !botMode;
-    if (botMode) {
-      botWaveSize   = 1;
-      nextWaveTimer = 0;
-      spawnBotWave(botWaveSize);
-      hud.showNotification('Bot mode ON — clear waves to face double the bots (B to stop)');
-    } else {
-      bots.forEach(b => b.dispose());
-      bots.length = 0;
-      hud.showNotification('Bot mode OFF');
-    }
-  }
+  if (e.code === 'KeyB' && gameStarted) network.send({ type: 'toggleBots' });
 });
 
 // ── Render loop ───────────────────────────────────────────────────────────────
@@ -382,45 +365,9 @@ function loop() {
   // Update remote players
   remotePlayers.forEach(rp => rp.update(dt, camera.position));
 
-  // Update bots
-  for (let i = bots.length - 1; i >= 0; i--) {
-    const bot = bots[i];
-    if (!bot.alive) { bots.splice(i, 1); continue; }
-    bot.update(dt, camera.position, localPlayer.alive, camera, dmg => {
-      if (!localPlayer.alive) return;
-      localPlayer.takeDamage(dmg);
-      audio.playHit();
-      // Mirror bot damage to the server so its health for us stays in sync —
-      // the health-pack `health >= 100` check and damage math use server health.
-      network.send({ type: 'botDamage', damage: dmg });
-      if (localPlayer.health <= 0) {
-        hud.addKillFeedEntry(bot.name, playerName || 'YOU', 'ak', false);
-        localPlayer.die();
-        // Bots are client-side only: tell the server so it marks us dead and
-        // drives the respawn (otherwise its alive/health/position state
-        // desyncs and the anti-teleport check rejects our local respawn).
-        // botName lets the server broadcast a kill-feed entry to other players.
-        network.send({ type: 'botDeath', botName: bot.name });
-      }
-    });
-  }
-
-  // Bot mode waves: when the current wave is cleared, grow it and respawn
-  // after a short breather. Doubles up to 16, then ramps logarithmically
-  // (+log2 bots per wave: 16 → 20 → 24 → 29 …) so the count — and the
-  // framerate — doesn't explode.
-  if (botMode && bots.length === 0) {
-    if (nextWaveTimer <= 0) {
-      botWaveSize = botWaveSize < 16
-        ? botWaveSize * 2
-        : botWaveSize + Math.round(Math.log2(botWaveSize));
-      nextWaveTimer = 2.5;
-      hud.showNotification(`Wave cleared — ${botWaveSize} bots incoming`);
-    } else {
-      nextWaveTimer -= dt;
-      if (nextWaveTimer <= 0) spawnBotWave(botWaveSize);
-    }
-  }
+  // Update bots (render-only: interpolate toward the latest server position;
+  // AI, movement and damage are all resolved server-side).
+  bots.forEach(bot => bot.update(dt, camera));
 
   // Animate pickups (bob + spin)
   pickups.update(dt);
