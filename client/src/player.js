@@ -330,7 +330,7 @@ export class LocalPlayer {
       if (d !== null && d < hitDist) { hitDist = d; hitId = id; hitBot = null; }
     });
 
-    // Check bots
+    // Check bots (server-authoritative; the local raycast only picks which one)
     if (this._bots) {
       this._bots.forEach(bot => {
         const d = bot.rayIntersect(origin, dir);
@@ -345,14 +345,11 @@ export class LocalPlayer {
     }
 
     if (hitBot) {
-      hitBot.takeDamage(def.damage);
+      // The server validates the hit, applies damage, and broadcasts the kill
+      // (handled in main.js 'botKilled'); we just show the local hit marker.
+      this._net.send({ type: 'shootBot', botId: hitBot.id, weapon: this._weapon });
       this._hud.showHitMarker();
       this._audio.playHitMarker();
-      if (!hitBot.alive) {
-        this._audio.playKillConfirm();
-        this._hud.showKillConfirm();
-        this._hud.addKillFeedEntry('YOU', hitBot.name, this._weapon, true);
-      }
     }
 
     if (wallHits.length && wallDist <= hitDist) {
