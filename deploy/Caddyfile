@@ -1,0 +1,20 @@
+# FragZone reverse proxy. Caddy terminates TLS (auto cert from Let's Encrypt)
+# and proxies to the game server on loopback. DOMAIN is substituted by setup.sh.
+#
+# `encode` compresses HTTP responses only — it does not negotiate the
+# permessage-deflate WebSocket extension, so gameplay frames stay uncompressed.
+# (The app also pins perMessageDeflate:false server-side.)
+#
+# reverse_proxy passes Upgrade/Connection through natively; no extra config is
+# needed for WebSockets.
+
+fragzone-server.{$DOMAIN} {
+	encode zstd gzip
+
+	reverse_proxy 127.0.0.1:8080 {
+		# Gameplay sockets sit idle between bursts and must never be reaped.
+		# Caddy has no idle timeout by default; these are explicit so a future
+		# global default can't silently kill long-lived matches.
+		flush_interval -1
+	}
+}
