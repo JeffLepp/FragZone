@@ -9,6 +9,7 @@
 set -euo pipefail
 
 REPO="${REPO:-https://github.com/JeffLepp/FragZone.git}"
+BRANCH="${BRANCH:-oracle-migration}"
 APP_DIR=/opt/fragzone
 : "${DOMAIN:?Set DOMAIN, e.g. sudo DOMAIN=example.com bash setup.sh}"
 HOSTNAME_FQDN="fragzone-server.${DOMAIN}"
@@ -42,12 +43,13 @@ id -u fragzone &>/dev/null || useradd --system --create-home --home-dir /home/fr
 mkdir -p "$APP_DIR"
 
 if [[ -d "$APP_DIR/.git" ]]; then
-  git -C "$APP_DIR" fetch --depth 1 origin
-  git -C "$APP_DIR" reset --hard origin/HEAD
+  git -C "$APP_DIR" fetch --depth 1 origin "$BRANCH"
+  git -C "$APP_DIR" reset --hard FETCH_HEAD
 else
   rm -rf "$APP_DIR"
-  git clone --depth 1 "$REPO" "$APP_DIR"
+  git clone --depth 1 --branch "$BRANCH" "$REPO" "$APP_DIR"
 fi
+echo "    deployed $(git -C "$APP_DIR" log --oneline -1)"
 chown -R fragzone:fragzone "$APP_DIR"
 
 echo "==> Production dependencies (no build step: the server is plain CommonJS)"
