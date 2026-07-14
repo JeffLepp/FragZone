@@ -1,0 +1,6 @@
+# These are executed/parsed on the Linux VM. A stray CR from a Windows commit
+# turns the shebang into "/usr/bin/env bash\r" and bash reports a bad
+# interpreter — pin LF regardless of anyone's core.autocrlf.
+*.sh              text eol=lf
+deploy/Caddyfile  text eol=lf
+*.service         text eol=lf
