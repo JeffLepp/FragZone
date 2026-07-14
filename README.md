@@ -1,6 +1,16 @@
+<div align="center">
+
+![FragZone gameplay](FragzoneRepoShowcase.gif)
+
 # FragZone — Browser FPS
 
-CS:Source-inspired online FPS. Free-for-all deathmatch, up to 8 players.
+**CS:Source-inspired online FPS. Free-for-all deathmatch, up to 8 players.**
+
+Three.js · WebSockets · no install, no plugins — just a browser.
+
+</div>
+
+---
 
 ## Controls
 
