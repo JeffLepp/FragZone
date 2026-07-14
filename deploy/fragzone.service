@@ -1,0 +1,39 @@
+[Unit]
+Description=FragZone game server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=fragzone
+Group=fragzone
+WorkingDirectory=/opt/fragzone/server
+
+# Secrets (if any are ever added) live here, root-owned 0600 — never in this
+# unit and never in git. The file may be empty; the app needs no secrets today.
+EnvironmentFile=/etc/fragzone.env
+Environment=NODE_ENV=production
+Environment=HOST=127.0.0.1
+Environment=PORT=8080
+
+ExecStart=/usr/bin/npm start
+Restart=always
+RestartSec=2
+
+# WebSockets hold one fd per player; the default 1024 is plenty for 8 but this
+# costs nothing and removes the ceiling as a variable.
+LimitNOFILE=65535
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fragzone
+
+# The app only listens on loopback and touches no files it doesn't ship with.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/fragzone
+
+[Install]
+WantedBy=multi-user.target

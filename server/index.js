@@ -1,8 +1,13 @@
 const http = require('http');
 const { WebSocketServer } = require('ws');
 const crypto = require('crypto');
+const { createHistogram, monitorEventLoopDelay } = require('perf_hooks');
 
+// Behind a reverse proxy (Caddy) in production, systemd pins HOST=127.0.0.1 so
+// the app is never reachable from the public internet except through TLS.
+// The 0.0.0.0 default keeps `npm run dev` working on a LAN.
 const PORT = process.env.PORT || 8080;
+const HOST = process.env.HOST || '0.0.0.0';
 
 const SPAWN_POINTS = [
   [-25, 0, -25], [25, 0, -25],
@@ -522,12 +527,52 @@ function updateBots(dt) {
 // HTTP + WebSocket server
 // ---------------------------------------------------------------------------
 
-const server = http.createServer((_req, res) => {
+// Tick + event-loop instrumentation. Both histograms are stdlib (perf_hooks),
+// so percentiles come free — no metrics dependency.
+const tickHist = createHistogram();
+const loopLag  = monitorEventLoopDelay({ resolution: 10 });
+loopLag.enable();
+
+const server = http.createServer((req, res) => {
+  const path = (req.url || '/').split('?')[0];
+
+  if (path === '/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end('{"status":"ok"}');
+  }
+
+  // Read-only counters for the load test; no secrets, nothing mutable.
+  if (path === '/metrics') {
+    const ms = ns => Math.round(ns / 1e5) / 10;
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({
+      uptimeSec: Math.round(process.uptime()),
+      players: players.size,
+      bots: bots.size,
+      tickTargetMs: 1000 / TICK_RATE,
+      tick: {
+        count: Number(tickHist.count),
+        p50: ms(tickHist.percentile(50)),
+        p95: ms(tickHist.percentile(95)),
+        max: ms(tickHist.max),
+      },
+      eventLoop: {
+        p50: ms(loopLag.percentile(50)),
+        p95: ms(loopLag.percentile(95)),
+        max: ms(loopLag.max),
+      },
+      memoryMb: Math.round(process.memoryUsage().rss / 1e6),
+    }));
+  }
+
   res.writeHead(200, { 'Content-Type': 'text/plain' });
   res.end('FragZone OK\n');
 });
 
-const wss = new WebSocketServer({ server });
+// perMessageDeflate stays off (the `ws` server default): gameplay messages are
+// small and frequent, so per-message compression would cost CPU and latency for
+// almost no bandwidth win. Set explicitly so a future upgrade can't flip it.
+const wss = new WebSocketServer({ server, perMessageDeflate: false });
 
 wss.on('connection', ws => {
   let joined = false;
@@ -660,7 +705,12 @@ wss.on('connection', ws => {
 
 let lastTick = Date.now();
 
-setInterval(() => {
+// setInterval is deliberate: Node reschedules the timer only after the callback
+// returns, so a slow tick delays the next one instead of queueing a backlog of
+// them. dt is clamped below, so a stall can never be "caught up" by a giant
+// simulation step either. Duration is recorded for /metrics.
+const tick = () => {
+  const t0  = process.hrtime.bigint();
   const now = Date.now();
   const dt  = Math.min((now - lastTick) / 1000, 0.1);
   lastTick  = now;
@@ -805,6 +855,34 @@ setInterval(() => {
       scores: scores(),
     });
   }
-}, 1000 / TICK_RATE);
 
-server.listen(PORT, () => console.log(`FragZone server on :${PORT}`));
+  // Histogram rejects 0, so floor at 1 ns.
+  tickHist.record(Number(process.hrtime.bigint() - t0) || 1);
+};
+
+const tickTimer = setInterval(tick, 1000 / TICK_RATE);
+
+server.listen(PORT, HOST, () => console.log(`FragZone server on ${HOST}:${PORT}`));
+
+// ---------------------------------------------------------------------------
+// Graceful shutdown (systemd sends SIGTERM on stop/restart)
+// ---------------------------------------------------------------------------
+
+let shuttingDown = false;
+
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`${signal} received — shutting down`);
+
+  clearInterval(tickTimer);          // stop the simulation
+  server.close();                    // stop accepting new connections
+  for (const ws of wss.clients) ws.close(1001, 'server shutting down');
+  wss.close(() => process.exit(0));
+
+  // A client that ignores the close frame shouldn't hold the process open.
+  setTimeout(() => process.exit(0), 5000).unref();
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT',  () => shutdown('SIGINT'));
