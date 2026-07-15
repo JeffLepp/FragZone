@@ -9,7 +9,7 @@
 set -euo pipefail
 
 REPO="${REPO:-https://github.com/JeffLepp/FragZone.git}"
-BRANCH="${BRANCH:-oracle-migration}"
+BRANCH="${BRANCH:-master}"
 APP_DIR=/opt/fragzone
 # DOMAIN is optional: without it, everything but Caddy runs (server + systemd),
 # so the box can be stood up before DNS exists. Re-run with DOMAIN set to add
