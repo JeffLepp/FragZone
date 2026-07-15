@@ -1,4 +1,5 @@
 const http = require('http');
+const { isIP } = require('net');
 const { WebSocketServer } = require('ws');
 const crypto = require('crypto');
 const { createHistogram, monitorEventLoopDelay } = require('perf_hooks');
@@ -19,6 +20,10 @@ function envInt(name, fallback, min, max) {
 
 const PORT = envInt('PORT', 8080, 0, 65535);
 const HOST = process.env.HOST || '0.0.0.0';
+const METRICS_PORT = envInt('METRICS_PORT', 8081, 0, 65535);
+if (PORT !== 0 && METRICS_PORT === PORT) {
+  throw new Error('METRICS_PORT must differ from PORT');
+}
 
 // Public-server resource ceilings. These defaults fit the advertised 8-player
 // match and keep malformed or abusive clients from consuming a small VM.
@@ -240,23 +245,28 @@ function uid() {
 }
 
 function isLoopback(address = '') {
-  return address === '127.0.0.1' || address === '::1' || address.startsWith('::ffff:127.');
+  return address.startsWith('127.') || address === '::1' || address.startsWith('::ffff:127.');
 }
 
 function clientIp(req) {
   const remote = req.socket.remoteAddress || 'unknown';
-  // Only trust forwarding metadata from the loopback reverse proxy. A direct
-  // LAN/dev connection cannot spoof its way around the per-IP ceiling.
-  // Use the LAST entry: the trusted hop (cloudflared/Caddy) appends the real
-  // client IP, while earlier entries arrive verbatim from the attacker — a
-  // client-sent "X-Forwarded-For: fake" must not defeat the per-IP cap.
-  if (isLoopback(remote)) {
-    const forwarded = req.headers['x-forwarded-for'];
-    if (typeof forwarded === 'string' && forwarded.length <= 256) {
-      return forwarded.split(',').pop().trim() || remote;
-    }
+  if (!isLoopback(remote)) return remote;
+
+  // Cloudflare supplies one edge-controlled address. The legacy Caddy config
+  // removes this header, so only the tunnel path can reach this branch.
+  const connecting = req.headers['cf-connecting-ip'];
+  if (connecting !== undefined) {
+    if (typeof connecting !== 'string' || connecting.length > 64) return null;
+    const ip = connecting.trim();
+    return isIP(ip) ? ip : null;
   }
-  return remote;
+
+  // Caddy fallback: it replaces untrusted XFF and appends the direct client.
+  const forwarded = req.headers['x-forwarded-for'];
+  if (forwarded === undefined) return remote;
+  if (typeof forwarded !== 'string' || forwarded.length > 256) return null;
+  const ip = forwarded.split(',').pop().trim();
+  return isIP(ip) ? ip : null;
 }
 
 function originAllowed(origin) {
@@ -693,32 +703,6 @@ const server = http.createServer((req, res) => {
     return reply(req, res, 200, '{"status":"ok"}', 'application/json; charset=utf-8');
   }
 
-  // Operational metrics are intentionally loopback-only. The reverse proxy
-  // (cloudflared or Caddy) always adds X-Forwarded-For, so a public request
-  // cannot look like a local one.
-  if (path === '/metrics' && isLoopback(req.socket.remoteAddress) && !req.headers['x-forwarded-for']) {
-    const ms = ns => Math.round(ns / 1e5) / 10;
-    return reply(req, res, 200, JSON.stringify({
-      uptimeSec: Math.round(process.uptime()),
-      players: players.size,
-      connections: wss.clients.size,
-      bots: bots.size,
-      tickTargetMs: 1000 / TICK_RATE,
-      tick: {
-        count: Number(tickHist.count),
-        p50: ms(tickHist.percentile(50)),
-        p95: ms(tickHist.percentile(95)),
-        max: ms(tickHist.max),
-      },
-      eventLoop: {
-        p50: ms(loopLag.percentile(50)),
-        p95: ms(loopLag.percentile(95)),
-        max: ms(loopLag.max),
-      },
-      memoryMb: Math.round(process.memoryUsage().rss / 1e6),
-    }), 'application/json; charset=utf-8');
-  }
-
   return reply(req, res, 404, 'Not Found\n');
 });
 
@@ -726,6 +710,40 @@ server.headersTimeout = 5000;
 server.requestTimeout = 10000;
 server.keepAliveTimeout = 5000;
 server.maxHeadersCount = 32;
+
+// Metrics use a separate loopback listener that is not part of the tunnel's
+// ingress target. Their privacy no longer depends on a proxy adding a header.
+const metricsServer = http.createServer((req, res) => {
+  const path = (req.url || '/').split('?')[0];
+  if (!['GET', 'HEAD'].includes(req.method) || path !== '/metrics') {
+    return reply(req, res, 404, 'Not Found\n');
+  }
+
+  const ms = ns => Math.round(ns / 1e5) / 10;
+  return reply(req, res, 200, JSON.stringify({
+    uptimeSec: Math.round(process.uptime()),
+    players: players.size,
+    connections: wss.clients.size,
+    bots: bots.size,
+    tickTargetMs: 1000 / TICK_RATE,
+    tick: {
+      count: Number(tickHist.count),
+      p50: ms(tickHist.percentile(50)),
+      p95: ms(tickHist.percentile(95)),
+      max: ms(tickHist.max),
+    },
+    eventLoop: {
+      p50: ms(loopLag.percentile(50)),
+      p95: ms(loopLag.percentile(95)),
+      max: ms(loopLag.max),
+    },
+    memoryMb: Math.round(process.memoryUsage().rss / 1e6),
+  }), 'application/json; charset=utf-8');
+});
+metricsServer.headersTimeout = 5000;
+metricsServer.requestTimeout = 10000;
+metricsServer.keepAliveTimeout = 5000;
+metricsServer.maxHeadersCount = 16;
 
 // perMessageDeflate stays off (the `ws` server default): gameplay messages are
 // small and frequent, so per-message compression would cost CPU and latency for
@@ -743,6 +761,7 @@ server.on('upgrade', (req, socket, head) => {
   const ip = clientIp(req);
 
   if (path !== '/') return rejectUpgrade(socket, '404 Not Found', 'Not Found');
+  if (!ip) return rejectUpgrade(socket, '400 Bad Request', 'Invalid forwarding headers');
   if (typeof origin === 'string' && origin.length > 256) {
     return rejectUpgrade(socket, '403 Forbidden', 'Forbidden');
   }
@@ -1124,6 +1143,11 @@ server.listen(PORT, HOST, () => {
   const boundPort = typeof address === 'object' && address ? address.port : PORT;
   console.log(`FragZone server on ${HOST}:${boundPort}`);
 });
+metricsServer.listen(METRICS_PORT, '127.0.0.1', () => {
+  const address = metricsServer.address();
+  const boundPort = typeof address === 'object' && address ? address.port : METRICS_PORT;
+  console.log(`FragZone metrics on 127.0.0.1:${boundPort}`);
+});
 
 // ---------------------------------------------------------------------------
 // Graceful shutdown (systemd sends SIGTERM on stop/restart)
@@ -1140,6 +1164,7 @@ function shutdown(signal) {
   clearInterval(heartbeatTimer);     // stop socket liveness probes
   loopLag.disable();
   server.close();                    // stop accepting new connections
+  metricsServer.close();             // stop the private metrics listener
   for (const ws of wss.clients) ws.close(1001, 'server shutting down');
   wss.close(() => process.exit(0));
 

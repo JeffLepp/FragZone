@@ -386,6 +386,9 @@ network.on('pickup', msg => {
 
 // ── Menu / game start ─────────────────────────────────────────────────────────
 const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8080';
+if (import.meta.env.PROD && new URL(WS_URL).protocol !== 'wss:') {
+  throw new Error('VITE_WS_URL must use wss:// in production');
+}
 
 hud.onPlay(name => {
   pendingJoinName = name;

@@ -16,6 +16,7 @@ EnvironmentFile=-/etc/fragzone.env
 Environment=NODE_ENV=production
 Environment=HOST=127.0.0.1
 Environment=PORT=8080
+Environment=METRICS_PORT=8081
 
 ExecStart=/usr/bin/node /opt/fragzone/server/index.js
 Restart=on-failure

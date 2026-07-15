@@ -19,7 +19,9 @@ branch. Older revisions are not maintained.
 
 The game server is designed to run as the unprivileged `fragzone` user, bound
 to loopback and reachable only through an outbound-only Cloudflare Tunnel
-connector (`cloudflared`). Do not expose port 8080 publicly, commit environment
-files, or disable the configured WebSocket origin and resource limits. Restrict
-SSH/22 to trusted administrator IPs in the Oracle VCN and require key-based SSH
-authentication.
+connector (`cloudflared`). Do not expose the game port 8080 or metrics port 8081,
+commit environment files, or disable the configured WebSocket origin and
+resource limits. `deploy/setup.sh` follows this boundary by default; its
+`DIRECT_CADDY=1` mode is retained only as an explicit rollback.
+Restrict SSH/22 to trusted administrator IPs in the Oracle VCN and require
+key-based SSH authentication.

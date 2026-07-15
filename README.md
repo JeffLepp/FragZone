@@ -12,7 +12,7 @@
 
 <table width="100%">
 <tr>
-<td width="28%" valign="top">
+<td width="33.33%" valign="top">
 
 ## Controls
 
@@ -31,7 +31,7 @@
 | B | Toggle bots |
 
 </td>
-<td width="27%" valign="top">
+<td width="33.33%" valign="top">
 
 ## Security
 
@@ -46,7 +46,7 @@ reporting.
 **Server**: Node.js + ws (WebSocket) — Oracle Cloud ARM VM, Cloudflare Tunnel + systemd
 
 </td>
-<td width="45%" valign="top">
+<td width="33.33%" valign="top">
 
 ## Local Dev
 

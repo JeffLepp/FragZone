@@ -28,6 +28,10 @@
 	respond @bad_methods 405
 
 	reverse_proxy 127.0.0.1:8080 {
+		# CF-Connecting-IP is authoritative only on the Cloudflare Tunnel path.
+		# Do not pass a client-supplied copy through this direct-origin fallback.
+		header_up -CF-Connecting-IP
+
 		# Gameplay sockets sit idle between bursts and must never be reaped.
 		# Caddy has no idle timeout by default; these are explicit so a future
 		# global default can't silently kill long-lived matches.

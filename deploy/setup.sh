@@ -3,23 +3,30 @@
 #
 #   sudo DOMAIN=example.com SITE_ORIGINS=https://example.com,https://www.example.com bash setup.sh
 #
-# Installs Node LTS + Caddy, creates the `fragzone` service account, deploys the
-# server to /opt/fragzone, wires up systemd, and opens 80/443. Everything below
-# is free-tier only: no load balancer, no managed anything, just this VM.
+# Installs Node LTS, creates the `fragzone` service account, deploys the server
+# to /opt/fragzone, and wires up systemd. Public ingress is added separately by
+# tunnel-setup.sh. Set DIRECT_CADDY=1 only for the retired direct-origin path.
 set -euo pipefail
 
 REPO="${REPO:-https://github.com/JeffLepp/FragZone.git}"
 BRANCH="${BRANCH:-master}"
 APP_DIR=/opt/fragzone
-# DOMAIN is optional: without it, everything but Caddy runs (server + systemd),
-# so the box can be stood up before DNS exists. Re-run with DOMAIN set to add
-# the TLS reverse proxy. Idempotent either way.
-DOMAIN="${DOMAIN:-}"   # normalize to empty so `set -u` is happy when it's unset
+DOMAIN="${DOMAIN:-}"   # browser origin policy and optional Caddy fallback
+DIRECT_CADDY="${DIRECT_CADDY:-0}"
 SUB="${SUB:-fragzone-server}"                       # subdomain label (override per deployment)
 HOSTNAME_FQDN="${DOMAIN:+${SUB}.${DOMAIN}}"
 SITE_ORIGINS="${SITE_ORIGINS:-${DOMAIN:+https://${DOMAIN},https://www.${DOMAIN}}}"
 
 [[ $EUID -eq 0 ]] || { echo "run with sudo"; exit 1; }
+
+if [[ "$DIRECT_CADDY" != 0 && "$DIRECT_CADDY" != 1 ]]; then
+  echo "DIRECT_CADDY must be 0 or 1" >&2
+  exit 1
+fi
+if [[ "$DIRECT_CADDY" == 1 && -z "$DOMAIN" ]]; then
+  echo "DIRECT_CADDY=1 requires DOMAIN=<base-domain>" >&2
+  exit 1
+fi
 
 if [[ -n "$DOMAIN" && ! "$DOMAIN" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]]; then
   echo "invalid DOMAIN: $DOMAIN" >&2
@@ -71,7 +78,7 @@ EOF
 fi
 echo "    node $(node -v) / npm $(npm -v) on $(dpkg --print-architecture)"
 
-if ! command -v caddy >/dev/null; then
+if [[ "$DIRECT_CADDY" == 1 ]] && ! command -v caddy >/dev/null; then
   echo "==> Caddy"
   curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key \
     | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
@@ -127,36 +134,48 @@ systemctl daemon-reload
 systemctl enable --now fragzone
 systemctl restart fragzone
 
-if [[ -n "$DOMAIN" ]]; then
-  echo "==> Caddy (DOMAIN=$DOMAIN)"
+if [[ "$DIRECT_CADDY" == 1 ]]; then
+  echo "==> Caddy legacy fallback (DOMAIN=$DOMAIN)"
   install -d -m 755 /etc/caddy
   sed "s|{\$FQDN}|${HOSTNAME_FQDN}|" "$APP_DIR/deploy/Caddyfile" > /etc/caddy/Caddyfile
   caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
   systemctl enable caddy
   systemctl reload caddy || systemctl restart caddy
 else
-  echo "==> Caddy: skipped (no DOMAIN yet — re-run with DOMAIN=... to enable TLS)"
-  systemctl stop caddy 2>/dev/null || true   # don't let default Caddy squat on :80/:443
+  echo "==> Caddy: disabled (Cloudflare Tunnel is the supported ingress)"
   systemctl disable caddy 2>/dev/null || true
+  systemctl stop caddy 2>/dev/null || true
 fi
 
 echo "==> Firewall"
-# ufw: only SSH + HTTP(S). 8080 is never opened — the app binds 127.0.0.1 anyway.
+# 8080 and the metrics port are never opened; both listeners bind to loopback.
 # Also restrict Oracle's VCN rule for port 22 to trusted administrator IPs; ufw
 # keeps SSH open here so rerunning this script cannot lock out the operator.
 ufw allow OpenSSH >/dev/null
-ufw allow 80/tcp  >/dev/null
-ufw allow 443/tcp >/dev/null
+if [[ "$DIRECT_CADDY" == 1 ]]; then
+  ufw allow 80/tcp  >/dev/null
+  ufw allow 443/tcp >/dev/null
+else
+  ufw delete allow 80/tcp  >/dev/null 2>&1 || true
+  ufw delete allow 443/tcp >/dev/null 2>&1 || true
+fi
 ufw --force enable >/dev/null
 
 # Oracle's Ubuntu image ships an iptables INPUT chain that REJECTs everything
 # except 22 — it sits *below* ufw's chain and silently drops 80/443 even after
 # the VCN security list is opened. This is the single most common reason a
 # fresh Oracle VM looks dead on port 443. Insert ACCEPTs above the REJECT.
-if iptables -C INPUT -j REJECT --reject-with icmp-host-prohibited 2>/dev/null; then
+if [[ "$DIRECT_CADDY" == 1 ]] && iptables -C INPUT -j REJECT --reject-with icmp-host-prohibited 2>/dev/null; then
   for p in 80 443; do
     iptables -C INPUT -p tcp --dport "$p" -j ACCEPT 2>/dev/null \
       || iptables -I INPUT -p tcp --dport "$p" -j ACCEPT
+  done
+  command -v netfilter-persistent >/dev/null && netfilter-persistent save || true
+elif [[ "$DIRECT_CADDY" != 1 ]]; then
+  for p in 80 443; do
+    while iptables -C INPUT -p tcp --dport "$p" -j ACCEPT 2>/dev/null; do
+      iptables -D INPUT -p tcp --dport "$p" -j ACCEPT
+    done
   done
   command -v netfilter-persistent >/dev/null && netfilter-persistent save || true
 fi
@@ -165,14 +184,14 @@ echo
 echo "==> Verify"
 sleep 2
 systemctl is-active fragzone >/dev/null && echo "    fragzone: active" || { journalctl -u fragzone -n 30 --no-pager; exit 1; }
-[[ -n "$DOMAIN" ]] && { systemctl is-active caddy >/dev/null && echo "    caddy:    active"; }
+[[ "$DIRECT_CADDY" == 1 ]] && { systemctl is-active caddy >/dev/null && echo "    caddy:    active"; }
 echo -n "    local /health: "; curl -fsS --max-time 5 http://127.0.0.1:8080/health && echo
 
-if [[ -n "$HOSTNAME_FQDN" ]]; then
+if [[ "$DIRECT_CADDY" == 1 ]]; then
   echo
   echo "Done. Public check (after DNS resolves to this box):"
   echo "  curl https://${HOSTNAME_FQDN}/health"
 else
   echo
-  echo "Server up. Re-run with DOMAIN=<your-domain> to add Caddy + TLS."
+  echo "Server up on loopback. Run $APP_DIR/deploy/tunnel-setup.sh to add public ingress."
 fi

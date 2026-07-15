@@ -17,19 +17,30 @@ function startServer() {
         ALLOWED_ORIGINS: ALLOWED_ORIGIN,
         MAX_PLAYERS: '1',
         MAX_CONNECTIONS: '3',
+        METRICS_PORT: '0',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
     let stderr = '';
+    let stdout = '';
     child.stderr.on('data', chunk => { stderr += chunk; });
     child.once('error', reject);
     child.once('exit', code => {
       if (code && !child.killed) reject(new Error(`server exited ${code}: ${stderr}`));
     });
     child.stdout.on('data', chunk => {
-      const match = chunk.toString().match(/127\.0\.0\.1:(\d+)/);
-      if (match) resolve({ child, port: Number(match[1]), stderr: () => stderr });
+      stdout += chunk.toString();
+      const serverMatch = stdout.match(/FragZone server on 127\.0\.0\.1:(\d+)/);
+      const metricsMatch = stdout.match(/FragZone metrics on 127\.0\.0\.1:(\d+)/);
+      if (serverMatch && metricsMatch) {
+        resolve({
+          child,
+          port: Number(serverMatch[1]),
+          metricsPort: Number(metricsMatch[1]),
+          stderr: () => stderr,
+        });
+      }
     });
   });
 }
@@ -88,9 +99,11 @@ test('public-server security boundaries', { timeout: 15000 }, async t => {
 
   assert.equal((await fetch(`${base}/health`)).status, 200);
   assert.equal((await fetch(`${base}/missing`)).status, 404);
+  assert.equal((await fetch(`${base}/metrics`)).status, 404);
   assert.equal((await fetch(`${base}/metrics`, {
     headers: { 'x-forwarded-for': '203.0.113.10' },
   })).status, 404);
+  assert.equal((await fetch(`http://127.0.0.1:${runtime.metricsPort}/metrics`)).status, 200);
 
   assert.equal(await rejectedStatus(socketUrl, 'https://evil.example'), 403);
 
@@ -107,15 +120,41 @@ test('public-server security boundaries', { timeout: 15000 }, async t => {
   oversized.send(JSON.stringify({ type: 'noop', padding: 'x'.repeat(20 * 1024) }));
   assert.equal((await oversizedClosed).code, 1009);
 
-  // Spoofing the first X-Forwarded-For entry must not dodge the per-IP cap:
-  // only the proxy-appended last hop identifies the client.
+  // Cloudflare's single-value client header wins even when an attacker pads or
+  // changes XFF. Both sockets still land in one per-IP bucket.
   const spoofer = await openSocket(socketUrl, ALLOWED_ORIGIN,
-    { 'x-forwarded-for': 'fake-a, 198.51.100.7' });
+    {
+      'cf-connecting-ip': '198.51.100.7',
+      'x-forwarded-for': `${'fake,'.repeat(70)}198.51.100.7`,
+    });
   assert.equal(await rejectedStatus(socketUrl, ALLOWED_ORIGIN,
-    { 'x-forwarded-for': 'fake-b, 198.51.100.7' }), 429);
+    {
+      'cf-connecting-ip': '198.51.100.7',
+      'x-forwarded-for': 'different-fake, 198.51.100.7',
+    }), 429);
   const spooferClosed = nextClose(spoofer);
   spoofer.close();
   await spooferClosed;
+
+  // Without Cloudflare's header, the validated last XFF entry supports the
+  // retired Caddy path. Malformed forwarding metadata is rejected, not folded
+  // into the proxy's shared loopback bucket.
+  assert.equal(await rejectedStatus(socketUrl, ALLOWED_ORIGIN,
+    { 'x-forwarded-for': 'x'.repeat(257) }), 400);
+  assert.equal(await rejectedStatus(socketUrl, ALLOWED_ORIGIN,
+    { 'x-forwarded-for': '198.51.100.8, ' }), 400);
+  assert.equal(await rejectedStatus(socketUrl, ALLOWED_ORIGIN, {
+    'cf-connecting-ip': 'not-an-ip',
+    'x-forwarded-for': '198.51.100.8',
+  }), 400);
+
+  const legacyProxy = await openSocket(socketUrl, ALLOWED_ORIGIN,
+    { 'x-forwarded-for': 'fake-a, 198.51.100.8' });
+  assert.equal(await rejectedStatus(socketUrl, ALLOWED_ORIGIN,
+    { 'x-forwarded-for': 'fake-b, 198.51.100.8' }), 429);
+  const legacyClosed = nextClose(legacyProxy);
+  legacyProxy.close();
+  await legacyClosed;
 
   const player = await openSocket(socketUrl);
   const init = nextMessage(player);

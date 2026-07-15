@@ -3,7 +3,7 @@
 // RTT percentiles, server tick/event-loop stats from /metrics).
 //
 //   node loadtest.js                                    # 8 clients, 60 s, localhost
-//   METRICS_URL=http://127.0.0.1:8080/metrics \
+//   METRICS_URL=http://127.0.0.1:8081/metrics \
 //     node loadtest.js wss://fragzone-server.example.com 8 300
 //
 // Clients speak the real protocol (join / move @20 Hz / shoot / throwGrenade),
@@ -20,7 +20,7 @@ const DURATION = Number(process.argv[4] || 60);   // seconds
 const target = new URL(WS_URL);
 const isLocalTarget = ['localhost', '127.0.0.1', '::1'].includes(target.hostname);
 const METRICS_URL = process.env.METRICS_URL ||
-  (isLocalTarget ? `${WS_URL.replace(/^ws/, 'http')}/metrics` : '');
+  (isLocalTarget ? 'http://127.0.0.1:8081/metrics' : '');
 const NET_HZ    = 20;     // matches client/src/player.js
 const MAX_SPEED = 18;     // server anti-teleport ceiling; stay well under it
 
