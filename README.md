@@ -47,27 +47,46 @@ npm run dev
 ## Deploy
 
 ### Server → Oracle Cloud (Always Free ARM VM)
+
 The server runs on an Ubuntu ARM64 VM behind Caddy (TLS/WSS reverse proxy),
-managed by systemd. Provision the box, then:
+managed by systemd. Point DNS at the VM, open 80/443 in the Oracle VCN security
+list, then run:
 
 ```bash
 # on the VM, as a sudo user
-sudo DOMAIN=<your-domain> SUB=<subdomain> bash deploy/setup.sh
+sudo DOMAIN=example.com \
+  SITE_ORIGINS=https://example.com,https://www.example.com \
+  bash deploy/setup.sh
 ```
 
-`deploy/setup.sh` installs Node LTS + Caddy, deploys `server/` to
-`/opt/fragzone`, runs `npm ci --omit=dev`, wires up the `fragzone` systemd
-service, opens 80/443, and has Caddy obtain the TLS cert. Run it without
-`DOMAIN` to stand up the server before DNS exists, then re-run with `DOMAIN`
-set to add TLS. See `deploy/` for the systemd unit and Caddyfile.
+`DOMAIN` creates `fragzone-server.example.com` by default; override the label
+with `SUB`. `SITE_ORIGINS` must list the exact HTTPS origins allowed to open a
+browser WebSocket. The script can run without `DOMAIN` before DNS is ready, but
+browser origins remain locked down until it is rerun with the production site.
 
 Point a **DNS-only (gray-cloud)** A record at the VM's public IP so players
-connect straight to Oracle.
+connect straight to Oracle. Port 8080 stays bound to loopback and must not be
+opened in the cloud firewall.
 
 ### Client → Vercel
 1. Import `client/` folder (or root) to Vercel
 2. Set environment variable: `VITE_WS_URL=wss://<server-subdomain>.<your-domain>`
 3. Deploy (Vite compiles the URL in at build time — redeploy after any change)
+
+The Vercel and Caddy configs include restrictive browser security headers. Keep
+production secrets in `/etc/fragzone.env`; never put them in this repository.
+
+## Verification
+
+```bash
+cd server && npm test
+cd ../client && npm run build
+```
+
+The server test covers origin rejection, player capacity, invalid JSON shapes,
+oversized frames, message-rate limiting, and private metrics.
+[exploits.md](exploits.md) walks through the client-side attacks these defenses
+stop; [SECURITY.md](SECURITY.md) is for private vulnerability reporting.
 
 ## Stack
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # FragZone — Oracle Cloud (Ubuntu ARM64) VM bootstrap. Idempotent; safe to re-run.
 #
-#   sudo DOMAIN=example.com bash setup.sh
+#   sudo DOMAIN=example.com SITE_ORIGINS=https://example.com,https://www.example.com bash setup.sh
 #
 # Installs Node LTS + Caddy, creates the `fragzone` service account, deploys the
 # server to /opt/fragzone, wires up systemd, and opens 80/443. Everything below
@@ -17,17 +17,47 @@ APP_DIR=/opt/fragzone
 DOMAIN="${DOMAIN:-}"   # normalize to empty so `set -u` is happy when it's unset
 SUB="${SUB:-fragzone-server}"                       # subdomain label (override per deployment)
 HOSTNAME_FQDN="${DOMAIN:+${SUB}.${DOMAIN}}"
+SITE_ORIGINS="${SITE_ORIGINS:-${DOMAIN:+https://${DOMAIN},https://www.${DOMAIN}}}"
 
 [[ $EUID -eq 0 ]] || { echo "run with sudo"; exit 1; }
+
+if [[ -n "$DOMAIN" && ! "$DOMAIN" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]]; then
+  echo "invalid DOMAIN: $DOMAIN" >&2
+  exit 1
+fi
+if [[ ! "$SUB" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]]; then
+  echo "invalid SUB: $SUB" >&2
+  exit 1
+fi
+if [[ "$SITE_ORIGINS" == *$'\n'* || "$SITE_ORIGINS" == *$'\r'* ]]; then
+  echo "SITE_ORIGINS must be a comma-separated, single-line value" >&2
+  exit 1
+fi
 
 echo "==> Packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq ca-certificates curl gnupg git ufw debian-keyring debian-archive-keyring apt-transport-https
 
-if ! command -v node >/dev/null || [[ "$(node -v | cut -c2-3)" -lt 20 ]]; then
-  echo "==> Node.js LTS (arm64)"
-  curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+NODE_MAJOR=0
+command -v node >/dev/null && NODE_MAJOR="$(node -p "process.versions.node.split('.')[0]")"
+if [[ "$NODE_MAJOR" -lt 20 ]]; then
+  echo "==> Node.js LTS"
+  ARCH="$(dpkg --print-architecture)"
+  [[ "$ARCH" == "arm64" || "$ARCH" == "amd64" ]] || { echo "unsupported architecture: $ARCH" >&2; exit 1; }
+  install -d -m 755 /usr/share/keyrings
+  curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+    | gpg --dearmor --yes -o /usr/share/keyrings/nodesource.gpg
+  chmod 644 /usr/share/keyrings/nodesource.gpg
+  cat > /etc/apt/sources.list.d/nodesource.sources <<EOF
+Types: deb
+URIs: https://deb.nodesource.com/node_22.x
+Suites: nodistro
+Components: main
+Architectures: $ARCH
+Signed-By: /usr/share/keyrings/nodesource.gpg
+EOF
+  apt-get update -qq
   apt-get install -y -qq nodejs
 fi
 echo "    node $(node -v) / npm $(npm -v) on $(dpkg --print-architecture)"
@@ -45,6 +75,7 @@ fi
 echo "==> Service account + app directory"
 id -u fragzone &>/dev/null || useradd --system --create-home --home-dir /home/fragzone --shell /usr/sbin/nologin fragzone
 mkdir -p "$APP_DIR"
+chown -R root:root "$APP_DIR"
 
 # Three sources, in priority order:
 #   1. Code already copied in (rsync/scp) — used as-is. Lets a private repo be
@@ -62,14 +93,21 @@ else
   git clone --depth 1 --branch "$BRANCH" "$REPO" "$APP_DIR"
   echo "    deployed $(git -C "$APP_DIR" log --oneline -1)"
 fi
-chown -R fragzone:fragzone "$APP_DIR"
+chown -R root:root "$APP_DIR"
+chmod -R go-w "$APP_DIR"
 
 echo "==> Production dependencies (no build step: the server is plain CommonJS)"
-sudo -u fragzone npm ci --omit=dev --prefix "$APP_DIR/server"
+npm ci --omit=dev --ignore-scripts --no-audit --prefix "$APP_DIR/server"
 
 echo "==> Environment file"
-# The app requires no secrets today; HOST/PORT are pinned in the unit. The file
-# exists so systemd's EnvironmentFile= resolves and secrets have a home later.
+# The generated runtime file is safe to replace on every deploy. Browser
+# origins are explicit in production so another site cannot open game sockets.
+printf 'ALLOWED_ORIGINS=%s\n' "$SITE_ORIGINS" > /etc/fragzone.runtime.env
+chown root:root /etc/fragzone.runtime.env
+chmod 600 /etc/fragzone.runtime.env
+
+# The optional override file is preserved across deploys and is the only place
+# future secrets should live.
 [[ -f /etc/fragzone.env ]] || printf '# FragZone production env. Secrets go here — never in git or the unit file.\n' > /etc/fragzone.env
 chown root:root /etc/fragzone.env
 chmod 600 /etc/fragzone.env

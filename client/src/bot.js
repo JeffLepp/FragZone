@@ -8,6 +8,13 @@ import * as THREE from 'three';
 const BOT_HP = 100;
 const BOT_R  = 0.38;
 const BOT_H  = 1.82;
+const BOT_BODY_GEO = new THREE.CylinderGeometry(BOT_R, BOT_R, 1.4, 10);
+const BOT_HEAD_GEO = new THREE.SphereGeometry(0.24, 10, 7);
+const BOT_HP_BG_GEO = new THREE.PlaneGeometry(0.76, 0.11);
+const BOT_HP_FILL_GEO = new THREE.PlaneGeometry(0.7, 0.07);
+const BOT_BODY_MAT = new THREE.MeshLambertMaterial({ color: 0x7D1717 });
+const BOT_HEAD_MAT = new THREE.MeshLambertMaterial({ color: 0xB86E52 });
+const BOT_HP_BG_MAT = new THREE.MeshBasicMaterial({ color: 0x181818, side: THREE.DoubleSide, depthTest: false });
 
 export class Bot {
   constructor(scene, data) {
@@ -18,6 +25,9 @@ export class Bot {
 
     this._pos       = new THREE.Vector3(data.pos[0], 0, data.pos[2]);
     this._targetPos = this._pos.clone();
+    this._hitBox = new THREE.Box3();
+    this._hitPoint = new THREE.Vector3();
+    this._hitRay = new THREE.Ray();
 
     this._buildMesh();
     this._setHp(data.hp != null ? data.hp : BOT_HP);
@@ -29,15 +39,15 @@ export class Bot {
     this._grp = new THREE.Group();
 
     const body = new THREE.Mesh(
-      new THREE.CylinderGeometry(BOT_R, BOT_R, 1.4, 10),
-      new THREE.MeshLambertMaterial({ color: 0x8B0000 })
+      BOT_BODY_GEO,
+      BOT_BODY_MAT,
     );
     body.position.y = 0.7;
     body.castShadow = true;
 
     const head = new THREE.Mesh(
-      new THREE.SphereGeometry(0.24, 10, 7),
-      new THREE.MeshLambertMaterial({ color: 0xCC7755 })
+      BOT_HEAD_GEO,
+      BOT_HEAD_MAT,
     );
     head.position.y = 1.56;
     head.castShadow = true;
@@ -48,11 +58,11 @@ export class Bot {
 
     // Health bar — separate group so billboard lookAt doesn't fight body rotation
     const bgMesh = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.76, 0.11),
-      new THREE.MeshBasicMaterial({ color: 0x222222, side: THREE.DoubleSide, depthTest: false })
+      BOT_HP_BG_GEO,
+      BOT_HP_BG_MAT,
     );
     this._hpMat = new THREE.MeshBasicMaterial({ color: 0x22CC44, side: THREE.DoubleSide, depthTest: false });
-    this._hpFill = new THREE.Mesh(new THREE.PlaneGeometry(0.7, 0.07), this._hpMat);
+    this._hpFill = new THREE.Mesh(BOT_HP_FILL_GEO, this._hpMat);
     this._hpFill.position.z = 0.003;
 
     this._hpGrp = new THREE.Group();
@@ -79,13 +89,10 @@ export class Bot {
   // Same API as RemotePlayer so LocalPlayer._tryShoot works unchanged.
   rayIntersect(origin, dir) {
     if (!this.alive) return null;
-    const box = new THREE.Box3(
-      new THREE.Vector3(this._pos.x - BOT_R, 0,     this._pos.z - BOT_R),
-      new THREE.Vector3(this._pos.x + BOT_R, BOT_H, this._pos.z + BOT_R)
-    );
-    const hit = new THREE.Vector3();
-    return new THREE.Ray(origin, dir).intersectBox(box, hit)
-      ? origin.distanceTo(hit)
+    this._hitBox.min.set(this._pos.x - BOT_R, 0,     this._pos.z - BOT_R);
+    this._hitBox.max.set(this._pos.x + BOT_R, BOT_H, this._pos.z + BOT_R);
+    return this._hitRay.set(origin, dir).intersectBox(this._hitBox, this._hitPoint)
+      ? origin.distanceTo(this._hitPoint)
       : null;
   }
 
@@ -107,13 +114,8 @@ export class Bot {
   dispose() {
     for (const grp of [this._grp, this._hpGrp]) {
       this._scene.remove(grp);
-      // Free GPU resources — each bot builds its own geometries/materials.
-      grp.traverse(obj => {
-        if (obj.isMesh) {
-          obj.geometry.dispose();
-          obj.material.dispose();
-        }
-      });
     }
+    // Static bot geometry/materials are shared across every instance.
+    this._hpMat.dispose();
   }
 }
