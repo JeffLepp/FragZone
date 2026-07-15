@@ -19,7 +19,7 @@ Confirm against Railway before deleting that project.
 - Public IP: `137.131.31.32` (ephemeral, attached to the instance)
 - SSH: `ubuntu@137.131.31.32`, key `~/.ssh/fragzone_oracle`, port 22 restricted
   to the admin IP at the OCI security list
-- Instance OCID: `ocid1.instance.oc1.phx.anyhqljrfw6tjdqcfpjheqcinyq3jxagbo4ewiflgwyoipibvzpq3tp4s7ka`
+- Instance OCID: kept out of the repo — read it from the OCI console / `oci compute instance list`
 
 ## Server layout on the VM
 - App: `/opt/fragzone/server` (owned by `fragzone`), started via `npm start`
