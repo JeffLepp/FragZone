@@ -61,6 +61,7 @@ export class HUD {
   #fz-menu button:hover { background: #ffa733; }
   #fz-menu button:focus-visible,
   #fz-menu input:focus-visible,
+  #fz-menu .legal a:focus-visible,
   #fz-pause button:focus-visible,
   #fz-pause input:focus-visible,
   #fz-pause select:focus-visible {
@@ -72,6 +73,13 @@ export class HUD {
     text-align: center; line-height: 1.9;
     letter-spacing: 1px;
   }
+  #fz-menu .legal {
+    margin-top: 20px; max-width: 560px;
+    color: #8f887a; font-size: 9px; line-height: 1.7;
+    text-align: center; letter-spacing: 0.5px;
+  }
+  #fz-menu .legal a { color: #c9b995; text-underline-offset: 2px; }
+  #fz-menu .legal a:hover { color: #ffb254; }
 
   /* ── pause (escape) menu ── */
   #fz-pause {
@@ -317,6 +325,12 @@ export class HUD {
     SHIFT · walk &nbsp;|&nbsp; SPACE · jump &nbsp;|&nbsp; ALT/C · crouch<br>
     G · grenade &nbsp;|&nbsp; R · reload &nbsp;|&nbsp; 1/2 · switch weapon<br>
     TAB · scoreboard &nbsp;|&nbsp; ESC · settings
+  </div>
+  <div class="legal">
+    13+ only · By playing, you agree to the <a href="/terms.html" target="_blank" rel="noreferrer">Terms</a><br>
+    <a href="/privacy.html" target="_blank" rel="noreferrer">Privacy</a> ·
+    <a href="/THIRD_PARTY_NOTICES.txt" target="_blank" rel="noreferrer">Licenses</a> ·
+    Independent project; not affiliated with or endorsed by Valve
   </div>
 </div>
 

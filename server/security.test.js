@@ -109,8 +109,10 @@ test('public-server security boundaries', { timeout: 15000 }, async t => {
 
   const player = await openSocket(socketUrl);
   const init = nextMessage(player);
-  player.send(JSON.stringify({ type: 'join', name: 'test-player' }));
-  assert.equal((await init).type, 'init');
+  player.send(JSON.stringify({ type: 'join', name: 'a.d.m.1.n' }));
+  const initMessage = await init;
+  assert.equal(initMessage.type, 'init');
+  assert.equal(initMessage.scores[initMessage.id].name, 'Anon');
   assert.equal(await rejectedStatus(socketUrl, ALLOWED_ORIGIN), 503);
 
   const rateClosed = nextClose(player);

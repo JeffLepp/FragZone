@@ -59,4 +59,19 @@ reporting.
 ## Stack
 
 - **Client**: Vite + Three.js (vanilla JS, no framework) — Vercel
-- **Server**: Node.js + ws (WebSocket) — Oracle Cloud ARM VM, Caddy + systemd
+- **Server**: Node.js + ws (WebSocket) — Oracle Cloud ARM VM, Cloudflare Tunnel + systemd
+
+## Legal and project status
+
+FragZone is an independent project and is not affiliated with, endorsed by, or
+sponsored by Valve Corporation. Counter-Strike and Valve are trademarks or
+registered trademarks of Valve Corporation.
+
+The original FragZone code and assets are **source available, all rights
+reserved**; public visibility does not grant permission to reuse or redistribute
+them. See [LICENSE.md](LICENSE.md). Direct dependencies retain their own MIT
+licenses; see [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).
+
+Players must be 13 or older and agree to the live service's
+[Terms of Use](https://fragzone.jeffersonkline.com/terms.html) and
+[Privacy Notice](https://fragzone.jeffersonkline.com/privacy.html).

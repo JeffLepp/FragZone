@@ -270,6 +270,43 @@ function originAllowed(origin) {
   return false;
 }
 
+// This is intentionally a small, high-confidence filter rather than a general
+// profanity engine. It blocks obvious staff impersonation and a short set of
+// severe slurs after common punctuation/leet substitutions are removed. The
+// Terms of Use cover abusive names that do not belong in a compact denylist.
+const RESERVED_CALLSIGNS = new Set([
+  'admin', 'administrator', 'moderator', 'mod', 'staff', 'system', 'server',
+  'fragzone', 'fragzoneadmin',
+]);
+const PROHIBITED_CALLSIGN_KEYS = new Set(['kike', 'chink', 'spic']);
+const PROHIBITED_CALLSIGN_FRAGMENTS = ['nigger', 'nigga', 'faggot', 'wetback'];
+const CALLSIGN_SUBSTITUTIONS = {
+  '0': 'o', '1': 'i', '3': 'e', '4': 'a', '5': 's', '7': 't',
+  '@': 'a', '$': 's', '!': 'i',
+};
+
+function callsignModerationKey(name) {
+  return name
+    .toLowerCase()
+    .replace(/[013457@$!]/g, char => CALLSIGN_SUBSTITUTIONS[char])
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function sanitizeCallsign(value) {
+  const clean = (typeof value === 'string' ? value : 'Anon')
+    .normalize('NFKC')
+    .replace(/[\p{Cc}\p{Cf}<>&"]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const shortened = Array.from(clean).slice(0, 16).join('') || 'Anon';
+  const key = callsignModerationKey(shortened);
+  if (RESERVED_CALLSIGNS.has(key) || PROHIBITED_CALLSIGN_KEYS.has(key) ||
+      PROHIBITED_CALLSIGN_FRAGMENTS.some(term => key.includes(term))) {
+    return 'Anon';
+  }
+  return shortened;
+}
+
 function rejectUpgrade(socket, status, reason) {
   const body = `${reason}\n`;
   socket.end(
@@ -767,11 +804,7 @@ wss.on('connection', ws => {
         ws.close(1013, 'server full');
         return;
       }
-      const rawName = typeof msg.name === 'string' ? msg.name : 'Anon';
-      const name = rawName
-        .replace(/[\u0000-\u001f\u007f<>&"]/g, '')
-        .trim()
-        .slice(0, 16) || 'Anon';
+      const name = sanitizeCallsign(msg.name);
       const { idx, pos } = pickSpawn();
       const player = {
         id: uid(), name,
