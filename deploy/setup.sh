@@ -14,7 +14,9 @@ APP_DIR=/opt/fragzone
 # DOMAIN is optional: without it, everything but Caddy runs (server + systemd),
 # so the box can be stood up before DNS exists. Re-run with DOMAIN set to add
 # the TLS reverse proxy. Idempotent either way.
-HOSTNAME_FQDN="${DOMAIN:+fragzone-server.${DOMAIN}}"
+DOMAIN="${DOMAIN:-}"   # normalize to empty so `set -u` is happy when it's unset
+SUB="${SUB:-fragzone-server}"                       # subdomain label (override per deployment)
+HOSTNAME_FQDN="${DOMAIN:+${SUB}.${DOMAIN}}"
 
 [[ $EUID -eq 0 ]] || { echo "run with sudo"; exit 1; }
 
@@ -44,14 +46,22 @@ echo "==> Service account + app directory"
 id -u fragzone &>/dev/null || useradd --system --create-home --home-dir /home/fragzone --shell /usr/sbin/nologin fragzone
 mkdir -p "$APP_DIR"
 
-if [[ -d "$APP_DIR/.git" ]]; then
+# Three sources, in priority order:
+#   1. Code already copied in (rsync/scp) — used as-is. Lets a private repo be
+#      deployed without giving the VM any git credentials.
+#   2. Existing clone — fast-forward it.
+#   3. Fresh clone (public repo only).
+if [[ -f "$APP_DIR/server/package.json" && ! -d "$APP_DIR/.git" ]]; then
+  echo "    using pre-copied code at $APP_DIR"
+elif [[ -d "$APP_DIR/.git" ]]; then
   git -C "$APP_DIR" fetch --depth 1 origin "$BRANCH"
   git -C "$APP_DIR" reset --hard FETCH_HEAD
+  echo "    deployed $(git -C "$APP_DIR" log --oneline -1)"
 else
-  rm -rf "$APP_DIR"
+  rm -rf "$APP_DIR"; mkdir -p "$APP_DIR"
   git clone --depth 1 --branch "$BRANCH" "$REPO" "$APP_DIR"
+  echo "    deployed $(git -C "$APP_DIR" log --oneline -1)"
 fi
-echo "    deployed $(git -C "$APP_DIR" log --oneline -1)"
 chown -R fragzone:fragzone "$APP_DIR"
 
 echo "==> Production dependencies (no build step: the server is plain CommonJS)"
@@ -73,7 +83,7 @@ systemctl restart fragzone
 if [[ -n "$DOMAIN" ]]; then
   echo "==> Caddy (DOMAIN=$DOMAIN)"
   install -d -m 755 /etc/caddy
-  sed "s/{\$DOMAIN}/${DOMAIN}/" "$APP_DIR/deploy/Caddyfile" > /etc/caddy/Caddyfile
+  sed "s|{\$FQDN}|${HOSTNAME_FQDN}|" "$APP_DIR/deploy/Caddyfile" > /etc/caddy/Caddyfile
   caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
   systemctl enable caddy
   systemctl reload caddy || systemctl restart caddy

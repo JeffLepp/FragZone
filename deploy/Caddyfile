@@ -8,7 +8,7 @@
 # reverse_proxy passes Upgrade/Connection through natively; no extra config is
 # needed for WebSockets.
 
-fragzone-server.{$DOMAIN} {
+{$FQDN} {
 	encode zstd gzip
 
 	reverse_proxy 127.0.0.1:8080 {
