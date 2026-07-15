@@ -8,12 +8,20 @@ import { HUD } from './hud.js';
 import { AudioSystem } from './audio.js';
 import { PickupManager } from './pickups.js';
 
+const QUALITY_PRESETS = Object.freeze({
+  performance: { pixelRatio: 1, shadows: false, shadowMapSize: 512 },
+  balanced:    { pixelRatio: 1.25, shadows: true, shadowMapSize: 1024 },
+});
+const storedQuality = localStorage.getItem('fz-quality');
+let graphicsQuality = storedQuality in QUALITY_PRESETS ? storedQuality : 'balanced';
+let menuNeedsRender = true;
+
 // ── Renderer ──────────────────────────────────────────────────────────────────
 const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, QUALITY_PRESETS[graphicsQuality].pixelRatio));
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type    = THREE.PCFSoftShadowMap;
+renderer.shadowMap.enabled = QUALITY_PRESETS[graphicsQuality].shadows;
+renderer.shadowMap.type    = THREE.PCFShadowMap;
 renderer.autoClear         = false; // we manage clear for viewmodel pass
 document.body.appendChild(renderer.domElement);
 
@@ -21,6 +29,11 @@ window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  menuNeedsRender = true;
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) menuNeedsRender = true;
 });
 
 // ── Scene & Camera ────────────────────────────────────────────────────────────
@@ -28,32 +41,34 @@ const scene  = new THREE.Scene();
 // Use setClearColor instead of scene.background — scene.background forces a
 // full framebuffer clear on every renderer.render() call regardless of
 // autoClear, which erases the world pass when the viewmodel pass runs.
-renderer.setClearColor(0x8CB8D4, 1);
-scene.fog = new THREE.FogExp2(0x8CB8D4, 0.020);
+renderer.setClearColor(0x718696, 1);
+scene.fog = new THREE.FogExp2(0x718696, 0.018);
 
 const camera = new THREE.PerspectiveCamera(95, window.innerWidth / window.innerHeight, 0.05, 100);
 // Camera added to scene so viewmodel children receive lighting
 scene.add(camera);
 
 // ── Lighting ──────────────────────────────────────────────────────────────────
-const ambient = new THREE.AmbientLight(0xffeedd, 0.65);
+const ambient = new THREE.AmbientLight(0xc8c0ad, 0.58);
 scene.add(ambient);
 
-const sun = new THREE.DirectionalLight(0xfff5e0, 1.1);
+const sun = new THREE.DirectionalLight(0xe3d4b8, 1.05);
 sun.position.set(15, 25, 10);
-sun.castShadow = true;
+sun.castShadow = QUALITY_PRESETS[graphicsQuality].shadows;
 sun.shadow.camera.near   = 0.5;
 sun.shadow.camera.far    = 100;
 sun.shadow.camera.left   = -45;
 sun.shadow.camera.right  = 45;
 sun.shadow.camera.top    = 45;
 sun.shadow.camera.bottom = -45;
-sun.shadow.mapSize.width  = 2048;
-sun.shadow.mapSize.height = 2048;
+sun.shadow.mapSize.set(
+  QUALITY_PRESETS[graphicsQuality].shadowMapSize,
+  QUALITY_PRESETS[graphicsQuality].shadowMapSize,
+);
 scene.add(sun);
 
 // Subtle fill from below
-const fill = new THREE.DirectionalLight(0xaaccff, 0.25);
+const fill = new THREE.DirectionalLight(0x7890a6, 0.18);
 fill.position.set(-10, -5, -10);
 scene.add(fill);
 
@@ -70,6 +85,44 @@ const remotePlayers = new Map(); // id -> RemotePlayer
 const bots = new Map();           // id -> Bot (server-authoritative, shared)
 
 const localPlayer = new LocalPlayer({ camera, scene, wallMeshes, remotePlayers, network, hud, audio, bots });
+
+function applyGraphicsQuality(mode, { persist = true } = {}) {
+  const nextMode = mode in QUALITY_PRESETS ? mode : 'balanced';
+  const preset = QUALITY_PRESETS[nextMode];
+  const shadowsChanged = renderer.shadowMap.enabled !== preset.shadows
+    || sun.shadow.mapSize.x !== preset.shadowMapSize;
+
+  graphicsQuality = nextMode;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, preset.pixelRatio));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.shadowMap.enabled = preset.shadows;
+  sun.castShadow = preset.shadows;
+  sun.shadow.mapSize.set(preset.shadowMapSize, preset.shadowMapSize);
+
+  if (shadowsChanged) {
+    if (sun.shadow.map) {
+      sun.shadow.map.dispose();
+      sun.shadow.map = null;
+    }
+    scene.traverse(obj => {
+      if (!obj.material) return;
+      const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
+      materials.forEach(material => { material.needsUpdate = true; });
+    });
+  }
+
+  document.body.classList.toggle('fz-performance', nextMode === 'performance');
+  menuNeedsRender = true;
+  if (persist) localStorage.setItem('fz-quality', nextMode);
+  return nextMode;
+}
+
+graphicsQuality = applyGraphicsQuality(graphicsQuality, { persist: false });
+hud.setQuality(graphicsQuality);
+hud.onQuality(mode => {
+  graphicsQuality = applyGraphicsQuality(mode);
+  hud.setQuality(graphicsQuality);
+});
 
 // ── Pointer lock ──────────────────────────────────────────────────────────────
 // unadjustedMovement bypasses OS pointer acceleration ("Enhance pointer
@@ -104,11 +157,11 @@ hud.onResume(lockPointer);
 
 // ── Explosion visual ──────────────────────────────────────────────────────────
 const explosionEffects = [];
+const EXPLOSION_GEO = new THREE.SphereGeometry(0.6, 10, 8);
 
 function spawnExplosion(pos) {
-  const geo  = new THREE.SphereGeometry(0.6, 10, 8);
   const mat  = new THREE.MeshBasicMaterial({ color: 0xFF5500, transparent: true, opacity: 1 });
-  const mesh = new THREE.Mesh(geo, mat);
+  const mesh = new THREE.Mesh(EXPLOSION_GEO, mat);
   mesh.position.set(...pos);
   scene.add(mesh);
   let life = 0;
@@ -119,7 +172,7 @@ function spawnExplosion(pos) {
     mat.opacity = Math.max(0, 1 - t);
     if (t >= 1) {
       scene.remove(mesh);
-      geo.dispose(); mat.dispose();
+      mat.dispose();
       return true; // done
     }
     return false;
@@ -352,12 +405,17 @@ window.addEventListener('keydown', e => {
 
 // ── Render loop ───────────────────────────────────────────────────────────────
 let prev = performance.now();
+let lastRender = 0;
 
 function loop() {
   requestAnimationFrame(loop);
   const now = performance.now();
   const dt  = Math.min((now - prev) / 1000, 0.05);
   prev = now;
+
+  // Background tabs already throttle requestAnimationFrame, but explicitly
+  // skip all render/update work so a hidden match consumes effectively no GPU.
+  if (document.hidden) return;
 
   // Update local player
   if (gameStarted) localPlayer.update(dt);
@@ -374,14 +432,22 @@ function loop() {
 
   // Update HUD
   hud.update(dt);
-  if (localPlayer.alive) {
-    hud.updateHealth(localPlayer.health, localPlayer.armor);
-  }
 
   // Update explosion effects
   for (let i = explosionEffects.length - 1; i >= 0; i--) {
     if (explosionEffects[i](dt)) explosionEffects.splice(i, 1);
   }
+
+  // The pre-game world is static, so draw it once beneath the menu. While the
+  // pause overlay is open, cap only rendering at 30 fps; network/state updates
+  // above continue normally for the online match.
+  if (!gameStarted) {
+    if (!menuNeedsRender) return;
+    menuNeedsRender = false;
+  } else if (!document.pointerLockElement && now - lastRender < 1000 / 30) {
+    return;
+  }
+  lastRender = now;
 
   // ── Render: world pass ──
   renderer.clear();

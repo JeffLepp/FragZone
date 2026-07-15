@@ -4,6 +4,8 @@ import * as THREE from 'three';
 const PLAYER_COLORS = [0xe05050, 0x50a0e0, 0x50e080, 0xe0c050, 0xc050e0, 0xe08050, 0x50e0e0];
 let colorIdx = 0;
 const colorMap = new Map();
+const PLAYER_BODY_GEO = new THREE.CylinderGeometry(0.35, 0.35, 1.2, 10);
+const PLAYER_HEAD_GEO = new THREE.SphereGeometry(0.22, 10, 8);
 
 function colorFor(id) {
   if (!colorMap.has(id)) colorMap.set(id, PLAYER_COLORS[colorIdx++ % PLAYER_COLORS.length]);
@@ -22,16 +24,15 @@ export class RemotePlayer {
     const group  = new THREE.Group();
 
     // Body (cylinder)
-    const bodyGeo = new THREE.CylinderGeometry(0.35, 0.35, 1.2, 10);
     const mat     = new THREE.MeshLambertMaterial({ color });
-    const body    = new THREE.Mesh(bodyGeo, mat);
+    this._bodyMaterial = mat;
+    const body    = new THREE.Mesh(PLAYER_BODY_GEO, mat);
     body.position.y = 0.6;
     body.castShadow = true;
     group.add(body);
 
     // Head (sphere)
-    const headGeo = new THREE.SphereGeometry(0.22, 10, 8);
-    const head    = new THREE.Mesh(headGeo, mat);
+    const head    = new THREE.Mesh(PLAYER_HEAD_GEO, mat);
     head.position.y = 1.55;
     head.castShadow = true;
     group.add(head);
@@ -47,6 +48,9 @@ export class RemotePlayer {
     // Interpolation state
     this._targetPos = data.pos ? new THREE.Vector3(...data.pos) : new THREE.Vector3();
     this._pos       = this._targetPos.clone();
+    this._hitBox    = new THREE.Box3();
+    this._hitPoint  = new THREE.Vector3();
+    this._hitRay    = new THREE.Ray();
     this._targetYaw = data.yaw || 0;
     this._yaw       = this._targetYaw;
 
@@ -86,15 +90,11 @@ export class RemotePlayer {
   rayIntersect(origin, dir) {
     if (!this.alive) return null;
     const p = this._pos;
-    const box = new THREE.Box3(
-      new THREE.Vector3(p.x - 0.4, p.y,        p.z - 0.4),
-      new THREE.Vector3(p.x + 0.4, p.y + 1.85, p.z + 0.4),
-    );
-    const ray    = new THREE.Ray(origin, dir);
-    const target = new THREE.Vector3();
-    const hit    = ray.intersectBox(box, target);
+    this._hitBox.min.set(p.x - 0.4, p.y,        p.z - 0.4);
+    this._hitBox.max.set(p.x + 0.4, p.y + 1.85, p.z + 0.4);
+    const hit = this._hitRay.set(origin, dir).intersectBox(this._hitBox, this._hitPoint);
     if (!hit) return null;
-    return origin.distanceTo(target);
+    return origin.distanceTo(this._hitPoint);
   }
 
   update(dt, cameraPos) {
@@ -111,17 +111,10 @@ export class RemotePlayer {
 
   dispose() {
     this._scene.remove(this._group);
-    // Free GPU resources. The name-tag sprite's geometry is a single object
-    // shared by all THREE.Sprite instances, so dispose only its material/texture.
-    this._group.traverse(obj => {
-      if (obj.isSprite) {
-        obj.material.map.dispose();
-        obj.material.dispose();
-      } else if (obj.isMesh) {
-        obj.geometry.dispose();
-        obj.material.dispose();
-      }
-    });
+    // Body/head geometry is shared; player color and name tag stay per-player.
+    this._bodyMaterial.dispose();
+    this._nameTag.material.map.dispose();
+    this._nameTag.material.dispose();
     colorMap.delete(this.id);
   }
 }

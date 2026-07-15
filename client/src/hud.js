@@ -11,6 +11,10 @@ export class HUD {
     this._killConfirmTimer = 0;
     this._notifTimer = 0;
     this._scoreVisible = false;
+    this._lastHealth = null;
+    this._lastArmor = null;
+    this._lastBloomGap = null;
+    this._lastReloadProgress = null;
 
     this._build();
   }
@@ -33,10 +37,10 @@ export class HUD {
     font-size: 64px; letter-spacing: 8px;
     text-transform: uppercase;
     color: #ff8c00;
-    text-shadow: 0 0 30px #ff8c0088;
+    text-shadow: 0 0 8px #ff8c0066;
     margin-bottom: 8px;
   }
-  #fz-menu .subtitle { font-size: 13px; letter-spacing: 4px; color: #aaa; margin-bottom: 40px; }
+  #fz-menu .subtitle { font-size: 13px; letter-spacing: 4px; color: #c0b69f; margin-bottom: 40px; }
   #fz-menu input {
     background: #111; border: 1px solid #555;
     color: #e8d8b0; padding: 10px 18px;
@@ -45,6 +49,7 @@ export class HUD {
     letter-spacing: 2px;
     margin-bottom: 16px;
   }
+  #fz-menu input::placeholder { color: #9f9682; opacity: 1; }
   #fz-menu input:focus { border-color: #ff8c00; }
   #fz-menu button {
     background: #ff8c00; border: none; color: #000;
@@ -54,8 +59,16 @@ export class HUD {
     transition: background 0.15s;
   }
   #fz-menu button:hover { background: #ffa733; }
+  #fz-menu button:focus-visible,
+  #fz-menu input:focus-visible,
+  #fz-pause button:focus-visible,
+  #fz-pause input:focus-visible,
+  #fz-pause select:focus-visible {
+    outline: 2px solid #ffd08a;
+    outline-offset: 3px;
+  }
   #fz-menu .controls {
-    margin-top: 32px; font-size: 11px; color: #666;
+    margin-top: 32px; font-size: 11px; color: #989080;
     text-align: center; line-height: 1.9;
     letter-spacing: 1px;
   }
@@ -70,7 +83,7 @@ export class HUD {
   #fz-pause .panel {
     background: rgba(0,0,0,0.88);
     border: 1px solid #444;
-    padding: 28px 36px; min-width: 320px;
+    padding: 28px 36px; width: min(360px, calc(100vw - 32px));
     color: #e8d8b0; text-align: center;
   }
   #fz-pause h3 {
@@ -80,7 +93,7 @@ export class HUD {
   }
   #fz-pause label {
     display: block; font-size: 11px; letter-spacing: 2px;
-    color: #888; margin-bottom: 8px; text-transform: uppercase;
+    color: #aaa18d; margin-bottom: 8px; text-transform: uppercase;
   }
   #fz-pause label span { color: #e8d8b0; }
   #fz-pause input[type=range] {
@@ -96,6 +109,16 @@ export class HUD {
   #fz-pause input[type=range]::-moz-range-thumb {
     width: 14px; height: 14px; background: #ff8c00;
     border: none; border-radius: 0; cursor: pointer;
+  }
+  #fz-pause .setting { margin-bottom: 22px; }
+  #fz-pause select {
+    width: 100%; background: #151515; border: 1px solid #555;
+    color: #e8d8b0; padding: 9px 10px;
+    font-family: inherit; font-size: 13px; cursor: pointer;
+  }
+  #fz-quality-hint {
+    margin-top: 7px; min-height: 14px;
+    color: #aaa18d; font-size: 10px; letter-spacing: 0.5px;
   }
   #fz-pause button {
     background: #ff8c00; border: none; color: #000;
@@ -142,11 +165,20 @@ export class HUD {
   }
 
   /* ── damage flash ── */
+  /* Static atmosphere: one cached overlay, no blur or post-processing pass. */
+  #fz-vignette {
+    position: fixed; inset: 0;
+    background: radial-gradient(ellipse at center, transparent 58%, rgba(4,7,9,0.3) 100%);
+    pointer-events: none; z-index: 14;
+    opacity: 0.52;
+  }
+  body.fz-performance #fz-vignette { display: none; }
+
   #fz-dmgflash {
     position: fixed; inset: 0;
-    background: rgba(200,20,20,0);
+    background: radial-gradient(circle at center, transparent 30%, rgba(185,18,18,0.78) 100%);
     pointer-events: none; z-index: 15;
-    transition: background 0.05s;
+    opacity: 0;
   }
 
   /* ── death screen ── */
@@ -164,9 +196,10 @@ export class HUD {
   #fz-health {
     position: fixed; bottom: 24px; left: 24px;
     pointer-events: none; z-index: 20;
-    color: #e8d8b0; line-height: 1.6;
+    color: #f0dfb7; line-height: 1.55;
+    text-shadow: 0 1px 2px #000;
   }
-  #fz-health .hp  { font-size: 28px; letter-spacing: 2px; }
+  #fz-health .hp  { font-size: 30px; letter-spacing: 2px; }
   #fz-health .hp span { color: #ff4444; }
   #fz-health .armor { font-size: 13px; letter-spacing: 1px; color: #88aaff; }
 
@@ -174,11 +207,12 @@ export class HUD {
   #fz-ammo {
     position: fixed; bottom: 24px; right: 24px;
     pointer-events: none; z-index: 20;
-    color: #e8d8b0; text-align: right; line-height: 1.6;
+    color: #f0dfb7; text-align: right; line-height: 1.55;
+    text-shadow: 0 1px 2px #000;
   }
-  #fz-ammo .weapon-name { font-size: 11px; letter-spacing: 3px; color: #888; text-transform: uppercase; }
-  #fz-ammo .ammo-cur    { font-size: 32px; letter-spacing: 2px; }
-  #fz-ammo .ammo-res    { font-size: 14px; color: #888; margin-left: 4px; }
+  #fz-ammo .weapon-name { font-size: 11px; letter-spacing: 3px; color: #b0a792; text-transform: uppercase; }
+  #fz-ammo .ammo-cur    { font-size: 34px; letter-spacing: 2px; }
+  #fz-ammo .ammo-res    { font-size: 14px; color: #b0a792; margin-left: 4px; }
   #fz-ammo .gren        { font-size: 13px; color: #88ff88; }
 
   /* ── kill feed ── */
@@ -187,14 +221,14 @@ export class HUD {
     width: 320px; pointer-events: none; z-index: 20;
   }
   .fz-kf-entry {
-    background: rgba(0,0,0,0.55);
-    color: #e8d8b0; font-size: 12px;
+    background: rgba(0,0,0,0.7);
+    border: 1px solid rgba(255,140,0,0.28);
+    color: #f0dfb7; font-size: 12px;
     padding: 4px 10px; margin-bottom: 3px;
     letter-spacing: 1px;
-    border-left: 2px solid #ff8c00;
     animation: fzkfSlide 0.15s ease-out;
   }
-  .fz-kf-entry.self-kill { border-left-color: #ff3333; }
+  .fz-kf-entry.self-kill { border-color: rgba(255,51,51,0.5); }
   @keyframes fzkfSlide { from { opacity:0; transform:translateX(20px); } to { opacity:1; transform:none; } }
   .fz-kf-icon { color: #ff8c00; margin: 0 6px; }
 
@@ -228,7 +262,7 @@ export class HUD {
   #fz-notif {
     position: fixed; top: 20px; left: 50%;
     transform: translateX(-50%);
-    color: #888; font-size: 11px; letter-spacing: 2px;
+    color: #d1c6aa; font-size: 11px; letter-spacing: 2px;
     pointer-events: none; z-index: 20;
     opacity: 0; transition: opacity 0.2s;
   }
@@ -252,7 +286,20 @@ export class HUD {
   }
   #fz-reloadbar-fill {
     height: 100%; background: #ff8c00;
-    width: 0%; transition: none;
+    width: 100%; transform: scaleX(0); transform-origin: left center;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .fz-kf-entry { animation: none; }
+    #fz-menu button, #fz-pause button, #fz-hit, #fz-kconfirm, #fz-notif {
+      transition: none;
+    }
+  }
+
+  @media (max-width: 560px) {
+    #fz-menu h1 { font-size: 46px; letter-spacing: 5px; }
+    #fz-menu .controls { max-width: calc(100vw - 32px); }
+    #fz-score { min-width: 0; width: calc(100vw - 32px); padding: 20px; }
   }
 
   /* hide cursor when locked */
@@ -279,6 +326,14 @@ export class HUD {
     <h3>Paused</h3>
     <label>Mouse Sensitivity <span id="fz-sens-val">1.00</span></label>
     <input id="fz-sens" type="range" min="0.1" max="3" step="0.05" value="1" />
+    <div class="setting">
+      <label for="fz-quality">Graphics</label>
+      <select id="fz-quality">
+        <option value="balanced">Balanced</option>
+        <option value="performance">Performance</option>
+      </select>
+      <div id="fz-quality-hint"></div>
+    </div>
     <button id="fz-resume">Resume</button>
   </div>
 </div>
@@ -296,6 +351,9 @@ export class HUD {
 
 <!-- Kill confirm -->
 <div id="fz-kconfirm">kill</div>
+
+<!-- Static low-cost atmosphere -->
+<div id="fz-vignette"></div>
 
 <!-- Damage vignette -->
 <div id="fz-dmgflash"></div>
@@ -353,6 +411,8 @@ export class HUD {
       pause:      document.getElementById('fz-pause'),
       sens:       document.getElementById('fz-sens'),
       sensVal:    document.getElementById('fz-sens-val'),
+      quality:    document.getElementById('fz-quality'),
+      qualityHint: document.getElementById('fz-quality-hint'),
       resumeBtn:  document.getElementById('fz-resume'),
       xhair:      document.getElementById('fz-xhair'),
       hit:        document.getElementById('fz-hit'),
@@ -427,6 +487,20 @@ export class HUD {
     this._el.sensVal.textContent = v.toFixed(2);
   }
 
+  onQuality(callback) {
+    this._el.quality.addEventListener('change', () => {
+      callback(this._el.quality.value);
+    });
+  }
+
+  setQuality(mode) {
+    const value = mode === 'performance' ? 'performance' : 'balanced';
+    this._el.quality.value = value;
+    this._el.qualityHint.textContent = value === 'performance'
+      ? 'Lowest GPU load · shadows and vignette off'
+      : 'Sharper image · lightweight shadows and vignette';
+  }
+
   onResume(callback) {
     this._el.resumeBtn.addEventListener('click', callback);
   }
@@ -446,8 +520,8 @@ export class HUD {
     // damage flash
     if (this._dmgTimer > 0) {
       this._dmgTimer -= dt;
-      const a = Math.max(0, this._dmgTimer / 0.3) * 0.35;
-      this._el.dmg.style.background = `rgba(200,20,20,${a})`;
+      this._el.dmg.style.opacity = Math.max(0, this._dmgTimer / 0.3);
+      if (this._dmgTimer <= 0) this._el.dmg.style.opacity = 0;
     }
     // notif fade
     if (this._notifTimer > 0) {
@@ -465,14 +539,22 @@ export class HUD {
   }
 
   setBloom(px) {
-    this._el.xhair.style.setProperty('--gap', `${Math.max(2, px)}px`);
+    const gap = Math.round(Math.max(2, px) * 4) / 4;
+    if (gap === this._lastBloomGap) return;
+    this._lastBloomGap = gap;
+    this._el.xhair.style.setProperty('--gap', `${gap}px`);
   }
 
   updateHealth(hp, armor) {
-    this._el.hp.textContent = Math.max(0, Math.round(hp));
-    this._el.ar.textContent = Math.max(0, Math.round(armor));
-    const r = Math.max(0, 255 - hp * 1.5);
-    const g = Math.min(255, hp * 2.55);
+    const nextHp = Math.max(0, Math.round(hp));
+    const nextArmor = Math.max(0, Math.round(armor));
+    if (nextHp === this._lastHealth && nextArmor === this._lastArmor) return;
+    this._lastHealth = nextHp;
+    this._lastArmor = nextArmor;
+    this._el.hp.textContent = nextHp;
+    this._el.ar.textContent = nextArmor;
+    const r = Math.max(0, 255 - nextHp * 1.5);
+    const g = Math.min(255, nextHp * 2.55);
     this._el.hp.style.color = `rgb(${r},${g},60)`;
   }
 
@@ -504,6 +586,7 @@ export class HUD {
 
   showDamage() {
     this._dmgTimer = 0.3;
+    this._el.dmg.style.opacity = 1;
   }
 
   showDeathScreen(respawnSec) {
@@ -586,10 +669,17 @@ export class HUD {
 
   showReload(progress) { // 0..1
     if (progress >= 1) {
-      this._el.reloadBar.style.display = 'none';
+      if (this._lastReloadProgress !== 1) this._el.reloadBar.style.display = 'none';
+      this._lastReloadProgress = 1;
     } else {
-      this._el.reloadBar.style.display = 'block';
-      this._el.reloadFill.style.width  = `${progress * 100}%`;
+      const nextProgress = Math.round(Math.max(0, progress) * 200) / 200;
+      if (this._lastReloadProgress === 1 || this._lastReloadProgress === null) {
+        this._el.reloadBar.style.display = 'block';
+      }
+      if (nextProgress !== this._lastReloadProgress) {
+        this._el.reloadFill.style.transform = `scaleX(${nextProgress})`;
+      }
+      this._lastReloadProgress = nextProgress;
     }
   }
 

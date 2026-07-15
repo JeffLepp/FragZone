@@ -76,6 +76,11 @@ export class LocalPlayer {
 
     this._pos = new THREE.Vector3();
     this._vel = new THREE.Vector3();
+    this._shotDir = new THREE.Vector3();
+    this._grenadeForward = new THREE.Vector3();
+    this._vmOffset = new THREE.Vector3();
+    this._flashWorldPos = new THREE.Vector3();
+    this._shotRaycaster = new THREE.Raycaster();
 
     this._yaw   = 0;
     this._pitch = 0;
@@ -123,6 +128,7 @@ export class LocalPlayer {
       ak:     this._buildVM('ak'),
       pistol: this._buildVM('pistol'),
     };
+    this._vmGroupList = Object.values(this._vmGroups);
     this._vmLight = new THREE.PointLight(0xffffff, 0, 4);
     this._vmLight.layers.set(1);
     scene.add(this._vmLight);
@@ -193,6 +199,7 @@ export class LocalPlayer {
     this._vel.set(0, 0, 0);
     this._health = 100; this._armor = 100;
     this._resetLoadout();
+    this._hud.updateHealth(100, 100);
     this._syncHud();
   }
 
@@ -310,17 +317,19 @@ export class LocalPlayer {
     // Ray direction with bloom spread
     const spd = Math.hypot(this._vel.x, this._vel.z);
     const sp  = this._bloom + (this._onGround ? 0 : 0.03) + spd * 0.002;
-    const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(this._cam.quaternion);
+    const dir = this._shotDir.set(0, 0, -1).applyQuaternion(this._cam.quaternion);
     dir.x += (Math.random() - 0.5) * sp;
     dir.y += (Math.random() - 0.5) * sp;
     dir.z += (Math.random() - 0.5) * sp;
     dir.normalize();
 
-    const origin = this._cam.position.clone();
+    const origin = this._cam.position;
 
     // Check wall distance
-    const rc        = new THREE.Raycaster(origin, dir, 0, 120);
-    const wallHits  = rc.intersectObjects(this._wallMeshes, false);
+    this._shotRaycaster.set(origin, dir);
+    this._shotRaycaster.near = 0;
+    this._shotRaycaster.far = 120;
+    const wallHits  = this._shotRaycaster.intersectObjects(this._wallMeshes, false);
     const wallDist  = wallHits.length ? wallHits[0].distance : Infinity;
 
     // Check remote players
@@ -366,7 +375,7 @@ export class LocalPlayer {
     this._grenades--;
     this._audio.playGrenadePull();
     const pos = this._cam.position.toArray();
-    const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(this._cam.quaternion);
+    const fwd = this._grenadeForward.set(0, 0, -1).applyQuaternion(this._cam.quaternion);
     const vel = [fwd.x * 14, fwd.y * 14 + 3, fwd.z * 14];
     this._net.send({ type: 'throwGrenade', pos, vel });
     this._syncHud();
@@ -697,11 +706,11 @@ export class LocalPlayer {
     const bobX = Math.cos(this._bobTimer) * 0.020 * bi;
     const bobY = Math.abs(Math.sin(this._bobTimer)) * 0.025 * bi + this._landBob * 0.04;
 
-    const off = new THREE.Vector3(0.26 + bobX, -0.22 - bobY, -0.44);
+    const off = this._vmOffset.set(0.26 + bobX, -0.22 - bobY, -0.44);
     off.applyQuaternion(this._cam.quaternion);
 
     const cur = this._vmGroups[this._weapon];
-    Object.values(this._vmGroups).forEach(g => {
+    this._vmGroupList.forEach(g => {
       g.visible = g === cur && this.alive;
     });
     if (!this.alive) return;
@@ -713,7 +722,7 @@ export class LocalPlayer {
     if (this._muzzleFlashTimer > 0) {
       this._muzzleFlashTimer -= dt;
       cur._flash.visible    = true;
-      this._vmLight.position.copy(cur._flash.getWorldPosition(new THREE.Vector3()));
+      this._vmLight.position.copy(cur._flash.getWorldPosition(this._flashWorldPos));
       this._vmLight.intensity = Math.max(0, this._muzzleFlashTimer / 0.045) * 5;
       if (this._muzzleFlashTimer <= 0) {
         cur._flash.visible    = false;

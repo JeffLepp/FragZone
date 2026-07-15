@@ -10,11 +10,11 @@ export const CEIL_Y    = 26;
 // cx/cy/cz = center position; w/h/d = full dimensions.
 const H = WALL_H;
 
-function wall(cx, cz, w, d, color = 0xA89070, h = H) {
+function wall(cx, cz, w, d, color = 0x8C8374, h = H) {
   return { cx, cy: h / 2, cz, w, h, d, color };
 }
 function crate(cx, cz, w = 2, d = 2) {
-  return { cx, cy: 0.75, cz, w, h: 1.5, d, color: 0x7A5830 };
+  return { cx, cy: 0.75, cz, w, h: 1.5, d, color: 0x654A30 };
 }
 
 // ── Mid skyscraper ────────────────────────────────────────────────────────────
@@ -34,7 +34,7 @@ const RAMP_W = 1.3;
 const SURF_W = 3;                // surf ramp width
 
 function towerDefs() {
-  const wallC = 0x8E96A3, deckC = 0x5C6470;
+  const wallC = 0x737A82, deckC = 0x49515A;
   const defs  = [];
   const B = (cx, cy, cz, w, h, d, color = wallC) => defs.push({ cx, cy, cz, w, h, d, color });
 
@@ -158,8 +158,8 @@ export const WALL_DEFS = [
   ...towerDefs(),
 
   // ── Side barriers ──  (provide flanking cover)
-  wall(-15,  0, 1, 18, 0x9C8B6E),
-  wall( 15,  0, 1, 18, 0x9C8B6E),
+  wall(-15,  0, 1, 18, 0x766C5B),
+  wall( 15,  0, 1, 18, 0x766C5B),
 
   // ── Cover crates ──
   crate( -9, -12),
@@ -203,10 +203,55 @@ export const SPAWN_POINTS = [
 // Scene geometry
 // ---------------------------------------------------------------------------
 
+const UNIT_BOX_GEO = new THREE.BoxGeometry(1, 1, 1);
+
+function createInstances(scene, geometry, material, count, setMatrix, {
+  name = 'static-instances',
+  castShadow = false,
+  receiveShadow = false,
+} = {}) {
+  const instances = new THREE.InstancedMesh(geometry, material, count);
+  const matrix = new THREE.Matrix4();
+  for (let i = 0; i < count; i++) {
+    setMatrix(i, matrix);
+    instances.setMatrixAt(i, matrix);
+  }
+  instances.name = name;
+  instances.castShadow = castShadow;
+  instances.receiveShadow = receiveShadow;
+  instances.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+  instances.instanceMatrix.needsUpdate = true;
+  instances.computeBoundingBox();
+  instances.computeBoundingSphere();
+  scene.add(instances);
+  return instances;
+}
+
+function addFloorColors(geometry) {
+  const positions = geometry.getAttribute('position');
+  const colors = new Float32Array(positions.count * 3);
+  const base = new THREE.Color(0x92775B);
+  const color = new THREE.Color();
+
+  for (let i = 0; i < positions.count; i++) {
+    const x = positions.getX(i);
+    const y = positions.getY(i);
+    const variation = Math.sin(x * 0.43 + y * 0.61) * 0.045
+      + Math.sin(x * 1.17 - y * 0.79) * 0.025;
+    color.copy(base).multiplyScalar(1 + variation);
+    colors[i * 3] = color.r;
+    colors[i * 3 + 1] = color.g;
+    colors[i * 3 + 2] = color.b;
+  }
+
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+}
+
 export function createMap(scene) {
   // Floor
   const floorGeo = new THREE.PlaneGeometry(60, 60, 12, 12);
-  const floorMat = new THREE.MeshLambertMaterial({ color: 0xC8A882 });
+  addFloorColors(floorGeo);
+  const floorMat = new THREE.MeshLambertMaterial({ vertexColors: true });
   const floor    = new THREE.Mesh(floorGeo, floorMat);
   floor.rotation.x = -Math.PI / 2;
   floor.receiveShadow = true;
@@ -214,62 +259,73 @@ export function createMap(scene) {
 
   // Ceiling (back-side so we see it from below)
   const ceilGeo = new THREE.PlaneGeometry(60, 60);
-  const ceilMat = new THREE.MeshLambertMaterial({ color: 0xB0A080, side: THREE.BackSide });
+  const ceilMat = new THREE.MeshLambertMaterial({ color: 0x77766F, side: THREE.BackSide });
   const ceil    = new THREE.Mesh(ceilGeo, ceilMat);
   ceil.rotation.x = Math.PI / 2;
   ceil.position.y = CEIL_Y;
   scene.add(ceil);
 
-  // Walls & crates
+  // Walls & crates. Grouping identical materials into InstancedMeshes keeps
+  // raycasting intact while collapsing dozens of static draw calls.
   const meshes = [];
+  const wallsByColor = new Map();
   for (const def of WALL_DEFS) {
-    const geo  = new THREE.BoxGeometry(def.w, def.h, def.d);
-    const mat  = new THREE.MeshLambertMaterial({ color: def.color });
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.set(def.cx, def.cy, def.cz);
-    mesh.castShadow    = true;
-    mesh.receiveShadow = true;
-    scene.add(mesh);
-    meshes.push(mesh);
+    if (!wallsByColor.has(def.color)) wallsByColor.set(def.color, []);
+    wallsByColor.get(def.color).push(def);
+  }
+  for (const [color, defs] of wallsByColor) {
+    const material = new THREE.MeshLambertMaterial({ color });
+    const instances = createInstances(scene, UNIT_BOX_GEO, material, defs.length, (i, matrix) => {
+      const def = defs[i];
+      matrix.makeScale(def.w, def.h, def.d);
+      matrix.setPosition(def.cx, def.cy, def.cz);
+    }, {
+      name: `walls-${color.toString(16)}`,
+      castShadow: true,
+      receiveShadow: true,
+    });
+    meshes.push(instances);
   }
 
   // Spiral ramp slabs. Sloped, so they live in RAMPS rather than WALL_DEFS;
   // pushed into `meshes` so bullets raycast them like any wall. Each slab is
   // stretched RAMP_W/2 past both ends so consecutive segments seal the corner.
-  const rampMat = new THREE.MeshLambertMaterial({ color: 0x6E7480 });
-  for (const r of RAMPS) {
-    const geo  = new THREE.BoxGeometry(Math.hypot(r.len, r.y1 - r.y0) + RAMP_W, RAMP_THICK, RAMP_W);
-    const mesh = new THREE.Mesh(geo, rampMat);
-    mesh.position.set((r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2 - RAMP_THICK / 2, (r.z0 + r.z1) / 2);
-    mesh.rotation.order = 'YZX';
-    mesh.rotation.y = Math.atan2(-(r.z1 - r.z0), r.x1 - r.x0);
-    mesh.rotation.z = Math.atan2(r.y1 - r.y0, r.len);
-    mesh.castShadow    = true;
-    mesh.receiveShadow = true;
-    scene.add(mesh);
-    meshes.push(mesh);
-  }
+  const rampMat = new THREE.MeshLambertMaterial({ color: 0x5F6670 });
+  const rampEuler = new THREE.Euler(0, 0, 0, 'YZX');
+  const rampQuat = new THREE.Quaternion();
+  const rampPos = new THREE.Vector3();
+  const rampScale = new THREE.Vector3();
+  const rampInstances = createInstances(scene, UNIT_BOX_GEO, rampMat, RAMPS.length, (i, matrix) => {
+    const r = RAMPS[i];
+    rampPos.set((r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2 - RAMP_THICK / 2, (r.z0 + r.z1) / 2);
+    rampEuler.set(0, Math.atan2(-(r.z1 - r.z0), r.x1 - r.x0), Math.atan2(r.y1 - r.y0, r.len), 'YZX');
+    rampQuat.setFromEuler(rampEuler);
+    rampScale.set(Math.hypot(r.len, r.y1 - r.y0) + RAMP_W, RAMP_THICK, RAMP_W);
+    matrix.compose(rampPos, rampQuat, rampScale);
+  }, { name: 'spiral-ramps', castShadow: true, receiveShadow: true });
+  meshes.push(rampInstances);
 
   // Surf ramps: same slab treatment, but centered along the true surface
   // normal — at ~46° the plain vertical offset used above would sink the
   // visual surface several cm below the physics surface.
-  const surfMat = new THREE.MeshLambertMaterial({ color: 0x4E86A0 });
-  for (const r of SURF_RAMPS) {
-    const geo  = new THREE.BoxGeometry(Math.hypot(r.len, r.y0 - r.y1), RAMP_THICK, SURF_W);
-    const mesh = new THREE.Mesh(geo, surfMat);
-    mesh.position.set(
+  const surfMat = new THREE.MeshLambertMaterial({ color: 0x3F6D7D });
+  const surfEuler = new THREE.Euler(0, 0, 0, 'YZX');
+  const surfQuat = new THREE.Quaternion();
+  const surfPos = new THREE.Vector3();
+  const surfScale = new THREE.Vector3();
+  const surfInstances = createInstances(scene, UNIT_BOX_GEO, surfMat, SURF_RAMPS.length, (i, matrix) => {
+    const r = SURF_RAMPS[i];
+    surfPos.set(
       (r.x0 + r.x1) / 2 - r.nx * RAMP_THICK / 2,
       (r.y0 + r.y1) / 2 - r.ny * RAMP_THICK / 2,
       (r.z0 + r.z1) / 2 - r.nz * RAMP_THICK / 2,
     );
-    mesh.rotation.order = 'YZX';
-    mesh.rotation.y = Math.atan2(-(r.z1 - r.z0), r.x1 - r.x0);
-    mesh.rotation.z = Math.atan2(r.y1 - r.y0, r.len);
-    mesh.castShadow    = true;
-    mesh.receiveShadow = true;
-    scene.add(mesh);
-    meshes.push(mesh);
-  }
+    surfEuler.set(0, Math.atan2(-(r.z1 - r.z0), r.x1 - r.x0), Math.atan2(r.y1 - r.y0, r.len), 'YZX');
+    surfQuat.setFromEuler(surfEuler);
+    surfScale.set(Math.hypot(r.len, r.y0 - r.y1), RAMP_THICK, SURF_W);
+    matrix.compose(surfPos, surfQuat, surfScale);
+  }, { name: 'surf-ramps', castShadow: true, receiveShadow: true });
+  meshes.push(surfInstances);
 
   addTowerDecor(scene);
 
@@ -282,40 +338,48 @@ export function createMap(scene) {
 function addTowerDecor(scene) {
   const nsPane   = new THREE.BoxGeometry(1.1, 1.6, 0.06);
   const ewPane   = new THREE.BoxGeometry(0.06, 1.6, 1.1);
-  const glassMat = new THREE.MeshLambertMaterial({ color: 0x16202C, emissive: 0x0A141E });
-  const litMat   = new THREE.MeshLambertMaterial({ color: 0xFFD588, emissive: 0x996F33 });
+  const glassMat = new THREE.MeshLambertMaterial({ color: 0x111820, emissive: 0x070D12 });
+  const litMat   = new THREE.MeshLambertMaterial({ color: 0xD6A95D, emissive: 0x6F4E20 });
   // Deterministic "some lights are on" pattern — stable across reloads.
   const lit = seed => seed % 10 < 3;
+  const panes = { nsDark: [], nsLit: [], ewDark: [], ewLit: [] };
 
   for (let row = 0; row < 6; row++) {
     const y = 4.6 + row * 2.8;
     [-3, -1, 1, 3].forEach((x, col) => {
       for (const zs of [-1, 1]) {
-        const m = new THREE.Mesh(nsPane, lit(row * 7 + col * 3 + (zs > 0 ? 5 : 0)) ? litMat : glassMat);
-        m.position.set(x, y, zs * 6.53);
-        scene.add(m);
+        const key = lit(row * 7 + col * 3 + (zs > 0 ? 5 : 0)) ? 'nsLit' : 'nsDark';
+        panes[key].push([x, y, zs * 6.53]);
       }
     });
     [-4.5, -2.7, -0.9, 0.9, 2.7, 4.5].forEach((z, col) => {
       for (const xs of [-1, 1]) {
-        const m = new THREE.Mesh(ewPane, lit(row * 5 + col * 7 + (xs > 0 ? 3 : 0)) ? litMat : glassMat);
-        m.position.set(xs * 5.53, y, z);
-        scene.add(m);
+        const key = lit(row * 5 + col * 7 + (xs > 0 ? 3 : 0)) ? 'ewLit' : 'ewDark';
+        panes[key].push([xs * 5.53, y, z]);
       }
     });
   }
 
+  for (const [key, positions] of Object.entries(panes)) {
+    const geometry = key.startsWith('ns') ? nsPane : ewPane;
+    const material = key.endsWith('Lit') ? litMat : glassMat;
+    createInstances(scene, geometry, material, positions.length, (i, matrix) => {
+      matrix.makeTranslation(...positions[i]);
+    }, { name: `tower-${key}` });
+  }
+
   // Parapet cap: slightly proud ledge along the wall tops, broken where the
   // surf-ramp gaps open.
-  const capMat = new THREE.MeshLambertMaterial({ color: 0x49505C });
-  for (const [w, d, x, z] of [
+  const capMat = new THREE.MeshLambertMaterial({ color: 0x3E464F });
+  const caps = [
     [1.4, 8.95, -5, -2.225], [1.4, 1.45, -5, 5.975],  // W (gap z 2.25–5.25)
     [1.4, 8.95,  5, -2.225], [1.4, 1.45,  5, 5.975],  // E
     [7.0, 1.4, -1.0, -6],                             // N (gap x 2.5–4.5)
     [3.3, 1.4, -2.85, 6], [3.3, 1.4, 2.85, 6],        // S (gap x ±1.2)
-  ]) {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(w, 0.18, d), capMat);
-    m.position.set(x, TOWER_H + 0.09, z);
-    scene.add(m);
-  }
+  ];
+  createInstances(scene, UNIT_BOX_GEO, capMat, caps.length, (i, matrix) => {
+    const [w, d, x, z] = caps[i];
+    matrix.makeScale(w, 0.18, d);
+    matrix.setPosition(x, TOWER_H + 0.09, z);
+  }, { name: 'tower-caps' });
 }

@@ -3,7 +3,8 @@
 // RTT percentiles, server tick/event-loop stats from /metrics).
 //
 //   node loadtest.js                                    # 8 clients, 60 s, localhost
-//   node loadtest.js wss://fragzone-server.example.com 8 300
+//   METRICS_URL=http://127.0.0.1:8080/metrics \
+//     node loadtest.js wss://fragzone-server.example.com 8 300
 //
 // Clients speak the real protocol (join / move @20 Hz / shoot / throwGrenade),
 // so this exercises the same code path a browser does. RTT uses native
@@ -12,11 +13,14 @@
 
 const WebSocket = require('ws');
 
-const URL      = process.argv[2] || 'ws://127.0.0.1:8080';
+const WS_URL   = process.argv[2] || 'ws://127.0.0.1:8080';
 const CLIENTS  = Number(process.argv[3] || 8);
 const DURATION = Number(process.argv[4] || 60);   // seconds
 
-const HTTP_BASE = URL.replace(/^ws/, 'http');
+const target = new URL(WS_URL);
+const isLocalTarget = ['localhost', '127.0.0.1', '::1'].includes(target.hostname);
+const METRICS_URL = process.env.METRICS_URL ||
+  (isLocalTarget ? `${WS_URL.replace(/^ws/, 'http')}/metrics` : '');
 const NET_HZ    = 20;     // matches client/src/player.js
 const MAX_SPEED = 18;     // server anti-teleport ceiling; stay well under it
 
@@ -33,7 +37,7 @@ const pct = (arr, p) => {
 
 function spawnClient(i) {
   stats.attempted++;
-  const ws = new WebSocket(URL);
+  const ws = new WebSocket(WS_URL);
   const c  = { ws, id: null, pos: [0, 0, 0], yaw: 0, alive: true, peers: [], bots: [], timers: [] };
   // Each bot orbits its spawn on its own circle, so movement is continuous and
   // always under MAX_SPEED — a teleport would be silently dropped by the server.
@@ -118,7 +122,7 @@ function spawnClient(i) {
 }
 
 (async () => {
-  console.log(`Load test: ${CLIENTS} clients -> ${URL} for ${DURATION}s\n`);
+  console.log(`Load test: ${CLIENTS} clients -> ${WS_URL} for ${DURATION}s\n`);
   const clients = [];
   for (let i = 0; i < CLIENTS; i++) {
     clients.push(spawnClient(i));
@@ -132,27 +136,29 @@ function spawnClient(i) {
   }, 3000);
 
   let peakCpu = 0, peakMem = 0;
-  const poll = setInterval(async () => {
+  const poll = METRICS_URL ? setInterval(async () => {
     try {
-      const m = await (await fetch(`${HTTP_BASE}/metrics`)).json();
+      const m = await (await fetch(METRICS_URL)).json();
       peakMem = Math.max(peakMem, m.memoryMb);
       process.stdout.write(
         `\r  t+${String(m.uptimeSec).padStart(3)}s  players=${m.players} bots=${m.bots}  ` +
         `tick p50=${m.tick.p50}ms p95=${m.tick.p95}ms max=${m.tick.max}ms  ` +
         `loop p95=${m.eventLoop.p95}ms  rss=${m.memoryMb}MB   `);
     } catch { /* server may be mid-restart; keep going */ }
-  }, 2000);
+  }, 2000) : null;
 
   await new Promise(r => setTimeout(r, DURATION * 1000));
-  clearInterval(poll);
+  if (poll) clearInterval(poll);
 
   let final = null;
-  try { final = await (await fetch(`${HTTP_BASE}/metrics`)).json(); } catch { /* ignore */ }
+  if (METRICS_URL) {
+    try { final = await (await fetch(METRICS_URL)).json(); } catch { /* ignore */ }
+  }
   clients.forEach(c => { c.timers.forEach(clearInterval); c.ws.close(); });
 
   const rate = ((stats.connected / stats.attempted) * 100).toFixed(1);
   console.log('\n\n──── RESULTS ────────────────────────────────');
-  console.log(`target                 ${URL}`);
+  console.log(`target                 ${WS_URL}`);
   console.log(`clients                ${stats.connected}/${stats.attempted} connected (${rate}%)`);
   console.log(`unexpected disconnects ${Math.max(0, stats.disconnects)}`);
   console.log(`socket errors          ${stats.failed}${stats.errors.length ? ' — ' + [...new Set(stats.errors)].join('; ') : ''}`);
@@ -163,11 +169,13 @@ function spawnClient(i) {
     console.log(`tick p50 / p95 / max   ${final.tick.p50} / ${final.tick.p95} / ${final.tick.max} ms  (n=${final.tick.count})`);
     console.log(`event loop p50 / p95   ${final.eventLoop.p50} / ${final.eventLoop.p95} ms  (max ${final.eventLoop.max})`);
     console.log(`memory peak            ${Math.max(peakMem, final.memoryMb)} MB`);
+  } else if (!METRICS_URL) {
+    console.log('server metrics         skipped (set METRICS_URL from the VM to include them)');
   }
   console.log('─────────────────────────────────────────────');
 
-  const ok = stats.connected === stats.attempted && stats.failed === 0 &&
-             final && final.tick.p95 < final.tickTargetMs;
+  const metricsOk = !METRICS_URL || (final && final.tick.p95 < final.tickTargetMs);
+  const ok = stats.connected === stats.attempted && stats.failed === 0 && metricsOk;
   console.log(ok ? '\nPASS' : '\nFAIL — see numbers above');
   process.exit(ok ? 0 : 1);
 })();

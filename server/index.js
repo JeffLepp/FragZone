@@ -6,8 +6,44 @@ const { createHistogram, monitorEventLoopDelay } = require('perf_hooks');
 // Behind a reverse proxy (Caddy) in production, systemd pins HOST=127.0.0.1 so
 // the app is never reachable from the public internet except through TLS.
 // The 0.0.0.0 default keeps `npm run dev` working on a LAN.
-const PORT = process.env.PORT || 8080;
+function envInt(name, fallback, min, max) {
+  const raw = process.env[name];
+  if (raw == null || raw === '') return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < min || value > max) {
+    throw new Error(`${name} must be an integer between ${min} and ${max}`);
+  }
+  return value;
+}
+
+const PORT = envInt('PORT', 8080, 0, 65535);
 const HOST = process.env.HOST || '0.0.0.0';
+
+// Public-server resource ceilings. These defaults fit the advertised 8-player
+// match and keep malformed or abusive clients from consuming a small VM.
+const MAX_PLAYERS            = envInt('MAX_PLAYERS', 8, 1, 64);
+const MAX_CONNECTIONS        = envInt('MAX_CONNECTIONS', MAX_PLAYERS + 4, MAX_PLAYERS, 128);
+const MAX_CONNECTIONS_PER_IP = envInt('MAX_CONNECTIONS_PER_IP', MAX_PLAYERS, 1, 32);
+const MAX_PAYLOAD_BYTES      = envInt('MAX_PAYLOAD_BYTES', 16 * 1024, 1024, 64 * 1024);
+const MAX_MESSAGES_PER_SEC   = envInt('MAX_MESSAGES_PER_SEC', 80, 20, 500);
+const MAX_BUFFERED_BYTES     = 256 * 1024;
+const JOIN_TIMEOUT_MS        = 5000;
+const HEARTBEAT_MS           = 30000;
+
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+const ALLOWED_ORIGINS = new Set(
+  (process.env.ALLOWED_ORIGINS || '')
+    .split(',')
+    .map(origin => origin.trim())
+    .filter(Boolean)
+    .map(origin => {
+      const url = new URL(origin);
+      if (!['http:', 'https:'].includes(url.protocol) || url.origin !== origin) {
+        throw new Error(`Invalid ALLOWED_ORIGINS entry: ${origin}`);
+      }
+      return url.origin;
+    }),
+);
 
 const SPAWN_POINTS = [
   [-25, 0, -25], [25, 0, -25],
@@ -134,6 +170,7 @@ const WEAPON_DATA = {
   ak:     { damage: 27, rpm: 600 },
   pistol: { damage: 35, rpm: 350 },
 };
+const PLAYER_WEAPONS = new Set([...Object.keys(WEAPON_DATA), 'grenade']);
 
 const TICK_RATE      = 20;
 const GRENADE_GRAV   = 15;
@@ -175,6 +212,7 @@ const BOT_SHOOT_RANGE = 24;
 const BOT_SHOOT_INT   = 1.0;  // seconds between shot attempts
 const BOT_ACCURACY    = 0.48; // probability of dealing damage per attempt with LOS
 const BOT_WAVE_BREAK  = 2.5;  // seconds between clearing a wave and the next spawn
+const MAX_BOTS        = envInt('MAX_BOTS', 32, 1, 128);
 // Matches client/src/map.js MAP_BOUNDS — keeps bots inside the arena.
 const BOT_BOUNDS      = { minX: -29.4, maxX: 29.4, minZ: -29.4, maxZ: 29.4 };
 
@@ -190,13 +228,57 @@ let botWaveSize   = 0;
 let botWaveTimer  = 0; // countdown between clearing a wave and the next spawn
 let botSeq        = 0;
 let botNameSeq    = 0;
+let lastBotToggle = 0;
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 function uid() {
-  return crypto.randomBytes(4).toString('hex');
+  return crypto.randomBytes(8).toString('hex');
+}
+
+function isLoopback(address = '') {
+  return address === '127.0.0.1' || address === '::1' || address.startsWith('::ffff:127.');
+}
+
+function clientIp(req) {
+  const remote = req.socket.remoteAddress || 'unknown';
+  // Only trust forwarding metadata from the loopback reverse proxy. A direct
+  // LAN/dev connection cannot spoof its way around the per-IP ceiling.
+  if (isLoopback(remote)) {
+    const forwarded = req.headers['x-forwarded-for'];
+    if (typeof forwarded === 'string' && forwarded.length <= 256) {
+      return forwarded.split(',')[0].trim() || remote;
+    }
+  }
+  return remote;
+}
+
+function originAllowed(origin) {
+  // Native clients and the load-test tool do not send Origin. Origin checks
+  // protect browsers from cross-site WebSocket abuse; they are not auth.
+  if (!origin) return true;
+  if (ALLOWED_ORIGINS.has(origin)) return true;
+  if (!IS_PRODUCTION) {
+    try {
+      const url = new URL(origin);
+      return ['http:', 'https:'].includes(url.protocol) &&
+        ['localhost', '127.0.0.1', '::1'].includes(url.hostname);
+    } catch { return false; }
+  }
+  return false;
+}
+
+function rejectUpgrade(socket, status, reason) {
+  const body = `${reason}\n`;
+  socket.end(
+    `HTTP/1.1 ${status}\r\n` +
+    'Connection: close\r\n' +
+    'Content-Type: text/plain; charset=utf-8\r\n' +
+    'Cache-Control: no-store\r\n' +
+    `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`,
+  );
 }
 
 // Returns [x, y, z] of finite numbers, or null if the client sent garbage.
@@ -254,15 +336,30 @@ function pickSpawn() {
   return { idx, pos: SPAWN_POINTS[idx] };
 }
 
+function sendString(ws, str) {
+  if (!ws || ws.readyState !== 1) return false;
+  if (ws.bufferedAmount > MAX_BUFFERED_BYTES) {
+    ws.terminate();
+    return false;
+  }
+  try {
+    ws.send(str);
+    return true;
+  } catch {
+    ws.terminate();
+    return false;
+  }
+}
+
 function broadcast(msg, skipWs = null) {
   const str = JSON.stringify(msg);
   for (const ws of players.keys()) {
-    if (ws !== skipWs && ws.readyState === 1) ws.send(str);
+    if (ws !== skipWs) sendString(ws, str);
   }
 }
 
 function send(ws, msg) {
-  if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg));
+  sendString(ws, JSON.stringify(msg));
 }
 
 function wsOfId(id) {
@@ -410,7 +507,7 @@ function spawnBotWave(count) {
     : 0;
   const byDist = [...SPAWN_POINTS].sort((a, b) => nearestPlayer(b) - nearestPlayer(a));
 
-  for (let i = 0; i < count; i++) {
+  for (let i = 0; i < Math.min(count, MAX_BOTS); i++) {
     const sp = byDist[i % byDist.length];
     // Jitter (widening as points are reused) so stacked bots don't overlap,
     // retrying when a jittered point lands inside geometry; the bare spawn
@@ -511,9 +608,9 @@ function updateBots(dt) {
   // +log2 so the count doesn't explode) and respawn after a short breather.
   if (botMode && bots.size === 0) {
     if (botWaveTimer <= 0) {
-      botWaveSize = botWaveSize < 16
+      botWaveSize = Math.min(MAX_BOTS, botWaveSize < 16
         ? botWaveSize * 2
-        : botWaveSize + Math.round(Math.log2(botWaveSize));
+        : botWaveSize + Math.round(Math.log2(botWaveSize)));
       botWaveTimer = BOT_WAVE_BREAK;
       broadcast({ type: 'botWave', size: botWaveSize, first: false });
     } else {
@@ -533,21 +630,36 @@ const tickHist = createHistogram();
 const loopLag  = monitorEventLoopDelay({ resolution: 10 });
 loopLag.enable();
 
+function reply(req, res, status, body, contentType = 'text/plain; charset=utf-8') {
+  res.writeHead(status, {
+    'Content-Type': contentType,
+    'Content-Length': Buffer.byteLength(body),
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'no-referrer',
+  });
+  res.end(req.method === 'HEAD' ? '' : body);
+}
+
 const server = http.createServer((req, res) => {
   const path = (req.url || '/').split('?')[0];
-
-  if (path === '/health') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    return res.end('{"status":"ok"}');
+  if (!['GET', 'HEAD'].includes(req.method)) {
+    res.setHeader('Allow', 'GET, HEAD');
+    return reply(req, res, 405, 'Method Not Allowed\n');
   }
 
-  // Read-only counters for the load test; no secrets, nothing mutable.
-  if (path === '/metrics') {
+  if (path === '/health') {
+    return reply(req, res, 200, '{"status":"ok"}', 'application/json; charset=utf-8');
+  }
+
+  // Operational metrics are intentionally loopback-only. Caddy adds
+  // X-Forwarded-For, so a public request cannot look like a local one.
+  if (path === '/metrics' && isLoopback(req.socket.remoteAddress) && !req.headers['x-forwarded-for']) {
     const ms = ns => Math.round(ns / 1e5) / 10;
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify({
+    return reply(req, res, 200, JSON.stringify({
       uptimeSec: Math.round(process.uptime()),
       players: players.size,
+      connections: wss.clients.size,
       bots: bots.size,
       tickTargetMs: 1000 / TICK_RATE,
       tick: {
@@ -562,29 +674,104 @@ const server = http.createServer((req, res) => {
         max: ms(loopLag.max),
       },
       memoryMb: Math.round(process.memoryUsage().rss / 1e6),
-    }));
+    }), 'application/json; charset=utf-8');
   }
 
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('FragZone OK\n');
+  return reply(req, res, 404, 'Not Found\n');
 });
+
+server.headersTimeout = 5000;
+server.requestTimeout = 10000;
+server.keepAliveTimeout = 5000;
+server.maxHeadersCount = 32;
 
 // perMessageDeflate stays off (the `ws` server default): gameplay messages are
 // small and frequent, so per-message compression would cost CPU and latency for
 // almost no bandwidth win. Set explicitly so a future upgrade can't flip it.
-const wss = new WebSocketServer({ server, perMessageDeflate: false });
+const wss = new WebSocketServer({
+  noServer: true,
+  perMessageDeflate: false,
+  maxPayload: MAX_PAYLOAD_BYTES,
+});
+const connectionsByIp = new Map();
+
+server.on('upgrade', (req, socket, head) => {
+  const path = (req.url || '/').split('?')[0];
+  const origin = req.headers.origin;
+  const ip = clientIp(req);
+
+  if (path !== '/') return rejectUpgrade(socket, '404 Not Found', 'Not Found');
+  if (typeof origin === 'string' && origin.length > 256) {
+    return rejectUpgrade(socket, '403 Forbidden', 'Forbidden');
+  }
+  if (!originAllowed(typeof origin === 'string' ? origin : '')) {
+    return rejectUpgrade(socket, '403 Forbidden', 'Forbidden');
+  }
+  if (players.size >= MAX_PLAYERS || wss.clients.size >= MAX_CONNECTIONS) {
+    return rejectUpgrade(socket, '503 Service Unavailable', 'Server full');
+  }
+  if ((connectionsByIp.get(ip) || 0) >= MAX_CONNECTIONS_PER_IP) {
+    return rejectUpgrade(socket, '429 Too Many Requests', 'Too many connections');
+  }
+
+  wss.handleUpgrade(req, socket, head, ws => {
+    ws.clientIp = ip;
+    connectionsByIp.set(ip, (connectionsByIp.get(ip) || 0) + 1);
+    wss.emit('connection', ws, req);
+  });
+});
 
 wss.on('connection', ws => {
   let joined = false;
+  let released = false;
+  let messageWindowStarted = Date.now();
+  let messageCount = 0;
+  ws.isAlive = true;
 
-  ws.on('message', raw => {
+  const joinTimer = setTimeout(() => {
+    if (!joined && ws.readyState === 1) ws.close(1008, 'join required');
+  }, JOIN_TIMEOUT_MS);
+  joinTimer.unref();
+
+  ws.on('pong', () => { ws.isAlive = true; });
+
+  ws.on('message', (raw, isBinary) => {
+    const now = Date.now();
+    if (now - messageWindowStarted >= 1000) {
+      messageWindowStarted = now;
+      messageCount = 0;
+    }
+    if (++messageCount > MAX_MESSAGES_PER_SEC) {
+      ws.close(1008, 'message rate exceeded');
+      return;
+    }
+    if (isBinary) {
+      ws.close(1003, 'text frames only');
+      return;
+    }
+
     let msg;
-    try { msg = JSON.parse(raw); } catch { return; }
+    try { msg = JSON.parse(raw.toString('utf8')); } catch { return; }
+    if (!msg || typeof msg !== 'object' || Array.isArray(msg) || typeof msg.type !== 'string') {
+      ws.close(1007, 'invalid message');
+      return;
+    }
 
     // ---- join ----
     if (!joined) {
-      if (msg.type !== 'join') return;
-      const name = String(msg.name || 'Anon').replace(/[<>&"]/g, '').slice(0, 16) || 'Anon';
+      if (msg.type !== 'join') {
+        ws.close(1008, 'join required');
+        return;
+      }
+      if (players.size >= MAX_PLAYERS) {
+        ws.close(1013, 'server full');
+        return;
+      }
+      const rawName = typeof msg.name === 'string' ? msg.name : 'Anon';
+      const name = rawName
+        .replace(/[\u0000-\u001f\u007f<>&"]/g, '')
+        .trim()
+        .slice(0, 16) || 'Anon';
       const { idx, pos } = pickSpawn();
       const player = {
         id: uid(), name,
@@ -599,6 +786,7 @@ wss.on('connection', ws => {
       };
       players.set(ws, player);
       joined = true;
+      clearTimeout(joinTimer);
 
       send(ws, {
         type: 'init',
@@ -618,31 +806,41 @@ wss.on('connection', ws => {
 
     switch (msg.type) {
       case 'move': {
-        if (!Array.isArray(msg.pos) || msg.pos.length < 3) break;
-        const [x, y, z] = msg.pos.map(Number);
-        if ([x, y, z].some(v => isNaN(v) || !isFinite(v))) break;
-        const dt = Math.max(0.001, (Date.now() - player.lastUpdate) / 1000);
+        if (!player.alive) break;
+        const next = vec3(msg.pos);
+        if (!next) break;
+        const [x, y, z] = next;
+        if (Math.abs(x) > 31 || Math.abs(z) > 31 || y < -2 || y > 32) break;
+        const dt = Math.max(0.001, Math.min(1, (now - player.lastUpdate) / 1000));
         const dx = x - player.pos[0], dz = z - player.pos[2];
-        if (Math.sqrt(dx*dx + dz*dz) / dt > MAX_SPEED) break; // anti-teleport
-        player.pos  = [x, Math.max(0, y), z];
-        player.yaw  = isFinite(msg.yaw)   ? Number(msg.yaw)   : 0;
-        player.pitch= isFinite(msg.pitch) ? Number(msg.pitch) : 0;
+        if (Math.hypot(dx, dz) / dt > MAX_SPEED) break; // anti-teleport
+        player.pos = [x, Math.max(0, y), z];
+        if (typeof msg.yaw === 'number' && Number.isFinite(msg.yaw)) {
+          player.yaw = Math.atan2(Math.sin(msg.yaw), Math.cos(msg.yaw));
+        }
+        if (typeof msg.pitch === 'number' && Number.isFinite(msg.pitch)) {
+          player.pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, msg.pitch));
+        }
         player.crouching = !!msg.crouching;
-        if (msg.weapon) player.weapon = msg.weapon;
-        player.lastUpdate = Date.now();
+        if (typeof msg.weapon === 'string' && PLAYER_WEAPONS.has(msg.weapon)) {
+          player.weapon = msg.weapon;
+        }
+        player.lastUpdate = now;
         break;
       }
       case 'shoot': {
         const wd = WEAPON_DATA[msg.weapon];
-        if (!player.alive || !wd) break;
+        if (!player.alive || !wd || typeof msg.targetId !== 'string') break;
         // Rate limit from the weapon's RPM (30 % slack for network jitter) so
         // a modified client can't deal more DPS than the real fire rate allows.
-        const now = Date.now();
         if (now - player.lastShot < (60000 / wd.rpm) * 0.7) break;
         // Range check with server positions: the client ray only reaches
         // MAX_SHOT_RANGE, so anything farther is a fabricated hit.
         const victim = [...players.values()].find(p => p.id === msg.targetId);
-        if (!victim || dist3(player.pos, victim.pos) > MAX_SHOT_RANGE) break;
+        if (!victim || !victim.alive || dist3(player.pos, victim.pos) > MAX_SHOT_RANGE) break;
+        const eye = [player.pos[0], player.pos[1] + (player.crouching ? 0.92 : 1.62), player.pos[2]];
+        const target = [victim.pos[0], victim.pos[1] + (victim.crouching ? 0.92 : 1.2), victim.pos[2]];
+        if (losBlocked(eye, target)) break;
         player.lastShot = now;
         applyDamage(ws, msg.targetId, wd.damage, msg.weapon);
         break;
@@ -651,12 +849,12 @@ wss.on('connection', ws => {
       // server positions); the client only raycasts to pick which bot it hit.
       case 'shootBot': {
         const wd = WEAPON_DATA[msg.weapon];
-        if (!player.alive || !wd) break;
-        const now = Date.now();
+        if (!player.alive || !wd || typeof msg.botId !== 'string') break;
         if (now - player.lastShot < (60000 / wd.rpm) * 0.7) break;
         const bot = bots.get(msg.botId);
-        if (!bot || !bot.alive) break;
-        if (dist3(player.pos, bot.pos) > MAX_SHOT_RANGE) break;
+        if (!bot || !bot.alive || dist3(player.pos, bot.pos) > MAX_SHOT_RANGE) break;
+        const eye = [player.pos[0], player.pos[1] + (player.crouching ? 0.92 : 1.62), player.pos[2]];
+        if (losBlocked(eye, [bot.pos[0], 1.2, bot.pos[2]])) break;
         player.lastShot = now;
         bot.hp -= Math.max(1, Math.round(wd.damage));
         if (bot.hp <= 0) killBot(bot, player, msg.weapon);
@@ -664,6 +862,8 @@ wss.on('connection', ws => {
       }
       // Any player can flip the game-wide bot mode (the B key).
       case 'toggleBots': {
+        if (now - lastBotToggle < 1000) break;
+        lastBotToggle = now;
         setBotMode(!botMode);
         break;
       }
@@ -688,6 +888,13 @@ wss.on('connection', ws => {
   });
 
   ws.on('close', () => {
+    clearTimeout(joinTimer);
+    if (!released) {
+      released = true;
+      const count = connectionsByIp.get(ws.clientIp) || 0;
+      if (count <= 1) connectionsByIp.delete(ws.clientIp);
+      else connectionsByIp.set(ws.clientIp, count - 1);
+    }
     const player = players.get(ws);
     if (player) broadcast({ type: 'playerLeft', id: player.id, name: player.name });
     players.delete(ws);
@@ -698,6 +905,18 @@ wss.on('connection', ws => {
   // frozen ghost avatar on every client. Listener kept so ws doesn't throw.
   ws.on('error', () => {});
 });
+
+const heartbeatTimer = setInterval(() => {
+  for (const ws of wss.clients) {
+    if (!ws.isAlive) {
+      ws.terminate();
+      continue;
+    }
+    ws.isAlive = false;
+    ws.ping();
+  }
+}, HEARTBEAT_MS);
+heartbeatTimer.unref();
 
 // ---------------------------------------------------------------------------
 // Game loop – 20 Hz
@@ -862,7 +1081,11 @@ const tick = () => {
 
 const tickTimer = setInterval(tick, 1000 / TICK_RATE);
 
-server.listen(PORT, HOST, () => console.log(`FragZone server on ${HOST}:${PORT}`));
+server.listen(PORT, HOST, () => {
+  const address = server.address();
+  const boundPort = typeof address === 'object' && address ? address.port : PORT;
+  console.log(`FragZone server on ${HOST}:${boundPort}`);
+});
 
 // ---------------------------------------------------------------------------
 // Graceful shutdown (systemd sends SIGTERM on stop/restart)
@@ -876,6 +1099,8 @@ function shutdown(signal) {
   console.log(`${signal} received — shutting down`);
 
   clearInterval(tickTimer);          // stop the simulation
+  clearInterval(heartbeatTimer);     // stop socket liveness probes
+  loopLag.disable();
   server.close();                    // stop accepting new connections
   for (const ws of wss.clients) ws.close(1001, 'server shutting down');
   wss.close(() => process.exit(0));
