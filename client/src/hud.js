@@ -278,7 +278,7 @@ export class HUD {
 
   /* ── reload bar ── */
   #fz-reloadbar {
-    position: fixed; bottom: 70px; right: 24px;
+    position: fixed; bottom: 122px; right: 24px;
     width: 120px; height: 3px;
     background: #333;
     pointer-events: none; z-index: 20;

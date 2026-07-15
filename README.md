@@ -24,6 +24,7 @@
 | R | Reload |
 | 1 / 2 | Switch weapon |
 | Tab | Scoreboard |
+| B | Toggle bots |
 
 ## Local Dev
 
