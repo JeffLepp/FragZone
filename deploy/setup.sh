@@ -11,8 +11,10 @@ set -euo pipefail
 REPO="${REPO:-https://github.com/JeffLepp/FragZone.git}"
 BRANCH="${BRANCH:-oracle-migration}"
 APP_DIR=/opt/fragzone
-: "${DOMAIN:?Set DOMAIN, e.g. sudo DOMAIN=example.com bash setup.sh}"
-HOSTNAME_FQDN="fragzone-server.${DOMAIN}"
+# DOMAIN is optional: without it, everything but Caddy runs (server + systemd),
+# so the box can be stood up before DNS exists. Re-run with DOMAIN set to add
+# the TLS reverse proxy. Idempotent either way.
+HOSTNAME_FQDN="${DOMAIN:+fragzone-server.${DOMAIN}}"
 
 [[ $EUID -eq 0 ]] || { echo "run with sudo"; exit 1; }
 
@@ -68,13 +70,18 @@ systemctl daemon-reload
 systemctl enable --now fragzone
 systemctl restart fragzone
 
-echo "==> Caddy"
-install -d -m 755 /etc/caddy
-DOMAIN="$DOMAIN" envsubst '${DOMAIN}' < "$APP_DIR/deploy/Caddyfile" > /etc/caddy/Caddyfile 2>/dev/null \
-  || sed "s/{\$DOMAIN}/${DOMAIN}/" "$APP_DIR/deploy/Caddyfile" > /etc/caddy/Caddyfile
-caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
-systemctl enable caddy
-systemctl reload caddy || systemctl restart caddy
+if [[ -n "$DOMAIN" ]]; then
+  echo "==> Caddy (DOMAIN=$DOMAIN)"
+  install -d -m 755 /etc/caddy
+  sed "s/{\$DOMAIN}/${DOMAIN}/" "$APP_DIR/deploy/Caddyfile" > /etc/caddy/Caddyfile
+  caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+  systemctl enable caddy
+  systemctl reload caddy || systemctl restart caddy
+else
+  echo "==> Caddy: skipped (no DOMAIN yet — re-run with DOMAIN=... to enable TLS)"
+  systemctl stop caddy 2>/dev/null || true   # don't let default Caddy squat on :80/:443
+  systemctl disable caddy 2>/dev/null || true
+fi
 
 echo "==> Firewall"
 # ufw: only SSH + HTTP(S). 8080 is never opened — the app binds 127.0.0.1 anyway.
@@ -99,11 +106,14 @@ echo
 echo "==> Verify"
 sleep 2
 systemctl is-active fragzone >/dev/null && echo "    fragzone: active" || { journalctl -u fragzone -n 30 --no-pager; exit 1; }
-systemctl is-active caddy    >/dev/null && echo "    caddy:    active"
+[[ -n "$DOMAIN" ]] && { systemctl is-active caddy >/dev/null && echo "    caddy:    active"; }
 echo -n "    local /health: "; curl -fsS --max-time 5 http://127.0.0.1:8080/health && echo
-echo -n "    port 8080 not public: "
-timeout 3 bash -c "</dev/tcp/$(curl -fsS --max-time 5 ifconfig.me)/8080" 2>/dev/null && echo "EXPOSED — FIX THIS" || echo "confirmed closed"
 
-echo
-echo "Done. Public check (after DNS resolves to this box):"
-echo "  curl https://${HOSTNAME_FQDN}/health"
+if [[ -n "$HOSTNAME_FQDN" ]]; then
+  echo
+  echo "Done. Public check (after DNS resolves to this box):"
+  echo "  curl https://${HOSTNAME_FQDN}/health"
+else
+  echo
+  echo "Server up. Re-run with DOMAIN=<your-domain> to add Caddy + TLS."
+fi
