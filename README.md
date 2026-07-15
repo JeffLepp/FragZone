@@ -4,9 +4,7 @@
 
 # FragZone — Browser FPS
 
-**CS:Source-inspired online FPS. Free-for-all deathmatch, up to 8 players.**
-
-Three.js · WebSockets · no install, no plugins — just a browser.
+## [Play FragZone](https://fragzone.jeffersonkline.com)
 
 </div>
 
@@ -43,39 +41,6 @@ npm install
 npm run dev
 # open http://localhost:3000
 ```
-
-## Deploy
-
-### Server → Oracle Cloud (Always Free ARM VM)
-
-The server runs on an Ubuntu ARM64 VM behind Caddy (TLS/WSS reverse proxy),
-managed by systemd. Point DNS at the VM, open 80/443 in the Oracle VCN security
-list, then run:
-
-```bash
-# on the VM, as a sudo user
-sudo DOMAIN=example.com \
-  SITE_ORIGINS=https://example.com,https://www.example.com \
-  bash deploy/setup.sh
-```
-
-`DOMAIN` creates `fragzone-server.example.com` by default; override the label
-with `SUB`. `SITE_ORIGINS` must list the exact HTTPS origins allowed to open a
-browser WebSocket. The script can run without `DOMAIN` before DNS is ready, but
-browser origins remain locked down until it is rerun with the production site.
-
-Point a **DNS-only (gray-cloud)** A record at the VM's public IP so players
-connect straight to Oracle. Port 8080 stays bound to loopback and must not be
-opened in the cloud firewall. Restrict SSH/22 in the Oracle VCN to trusted
-administrator IPs and use key-based login.
-
-### Client → Vercel
-1. Import `client/` folder (or root) to Vercel
-2. Set environment variable: `VITE_WS_URL=wss://<server-subdomain>.<your-domain>`
-3. Deploy (Vite compiles the URL in at build time — redeploy after any change)
-
-The Vercel and Caddy configs include restrictive browser security headers. Keep
-production secrets in `/etc/fragzone.env`; never put them in this repository.
 
 ## Verification
 
