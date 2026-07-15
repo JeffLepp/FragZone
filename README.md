@@ -66,7 +66,8 @@ browser origins remain locked down until it is rerun with the production site.
 
 Point a **DNS-only (gray-cloud)** A record at the VM's public IP so players
 connect straight to Oracle. Port 8080 stays bound to loopback and must not be
-opened in the cloud firewall.
+opened in the cloud firewall. Restrict SSH/22 in the Oracle VCN to trusted
+administrator IPs and use key-based login.
 
 ### Client → Vercel
 1. Import `client/` folder (or root) to Vercel
@@ -85,8 +86,9 @@ cd ../client && npm run build
 
 The server test covers origin rejection, player capacity, invalid JSON shapes,
 oversized frames, message-rate limiting, and private metrics.
-[exploits.md](exploits.md) walks through the client-side attacks these defenses
-stop; [SECURITY.md](SECURITY.md) is for private vulnerability reporting.
+[exploits.md](exploits.md) documents the client-abuse controls and their known
+trust boundaries; [SECURITY.md](SECURITY.md) is for private vulnerability
+reporting.
 
 ## Stack
 
