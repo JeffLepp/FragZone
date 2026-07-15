@@ -1,7 +1,7 @@
 # FragZone reverse proxy. Caddy terminates TLS (automatic certificate) and
 # proxies to the game server on loopback. FQDN is substituted by setup.sh.
 #
-# `encode` compresses HTTP responses only — it does not negotiate the
+# `encode` compresses HTTP responses only - it does not negotiate the
 # permessage-deflate WebSocket extension, so gameplay frames stay uncompressed.
 # (The app also pins perMessageDeflate:false server-side.)
 #

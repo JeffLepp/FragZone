@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# FragZone — Oracle Cloud (Ubuntu ARM64) VM bootstrap. Idempotent; safe to re-run.
+# FragZone - Oracle Cloud (Ubuntu ARM64) VM bootstrap. Idempotent; safe to re-run.
 #
 #   sudo DOMAIN=example.com SITE_ORIGINS=https://example.com,https://www.example.com bash setup.sh
 #
@@ -94,9 +94,9 @@ mkdir -p "$APP_DIR"
 chown -R root:root "$APP_DIR"
 
 # Three sources, in priority order:
-#   1. Code already copied in (rsync/scp) — used as-is. Lets a private repo be
+#   1. Code already copied in (rsync/scp) - used as-is. Lets a private repo be
 #      deployed without giving the VM any git credentials.
-#   2. Existing clone — fast-forward it.
+#   2. Existing clone - fast-forward it.
 #   3. Fresh clone (public repo only).
 if [[ -f "$APP_DIR/server/package.json" && ! -d "$APP_DIR/.git" ]]; then
   echo "    using pre-copied code at $APP_DIR"
@@ -124,7 +124,7 @@ chmod 600 /etc/fragzone.runtime.env
 
 # The optional override file is preserved across deploys and is the only place
 # future secrets should live.
-[[ -f /etc/fragzone.env ]] || printf '# FragZone production env. Secrets go here — never in git or the unit file.\n' > /etc/fragzone.env
+[[ -f /etc/fragzone.env ]] || printf '# FragZone production env. Secrets go here - never in git or the unit file.\n' > /etc/fragzone.env
 chown root:root /etc/fragzone.env
 chmod 600 /etc/fragzone.env
 
@@ -162,7 +162,7 @@ fi
 ufw --force enable >/dev/null
 
 # Oracle's Ubuntu image ships an iptables INPUT chain that REJECTs everything
-# except 22 — it sits *below* ufw's chain and silently drops 80/443 even after
+# except 22 - it sits *below* ufw's chain and silently drops 80/443 even after
 # the VCN security list is opened. This is the single most common reason a
 # fresh Oracle VM looks dead on port 443. Insert ACCEPTs above the REJECT.
 if [[ "$DIRECT_CADDY" == 1 ]] && iptables -C INPUT -j REJECT --reject-with icmp-host-prohibited 2>/dev/null; then

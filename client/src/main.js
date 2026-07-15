@@ -38,7 +38,7 @@ document.addEventListener('visibilitychange', () => {
 
 // ── Scene & Camera ────────────────────────────────────────────────────────────
 const scene  = new THREE.Scene();
-// Use setClearColor instead of scene.background — scene.background forces a
+// Use setClearColor instead of scene.background - scene.background forces a
 // full framebuffer clear on every renderer.render() call regardless of
 // autoClear, which erases the world pass when the viewmodel pass runs.
 renderer.setClearColor(0x718696, 1);
@@ -132,7 +132,7 @@ function lockPointer() {
   const el = renderer.domElement;
   const p = el.requestPointerLock({ unadjustedMovement: true });
   // Retry without options where unsupported; the retry can also reject
-  // (e.g. re-locking too soon after Escape) — swallow it, the user just clicks again.
+  // (e.g. re-locking too soon after Escape) - swallow it, the user just clicks again.
   if (p && p.catch) p.catch(() => { const r = el.requestPointerLock(); if (r && r.catch) r.catch(() => {}); });
 }
 
@@ -185,7 +185,7 @@ let gameStarted = false;
 let pendingJoinName = '';
 
 // Pages can't preventDefault window-closing shortcuts (Ctrl+W, Alt+F4), but
-// they can require a leave-site confirmation — turning an instant close
+// they can require a leave-site confirmation - turning an instant close
 // mid-game into a cancellable prompt.
 window.addEventListener('beforeunload', e => {
   if (gameStarted) { e.preventDefault(); e.returnValue = ''; }
@@ -224,7 +224,7 @@ network.onStatus((status, { url }) => {
 
 network.on('init', msg => {
   // On a rejoin after reconnect the server assigns a new id and sends a fresh
-  // world snapshot — drop everything left over from the old session.
+  // world snapshot - drop everything left over from the old session.
   remotePlayers.forEach(rp => rp.dispose());
   remotePlayers.clear();
   bots.forEach(b => b.dispose());
@@ -274,7 +274,7 @@ network.on('stateUpdate', msg => {
     }
     rp.updateState(p);
   });
-  // Prune remotes the server no longer reports — covers any path where the
+  // Prune remotes the server no longer reports - covers any path where the
   // playerLeft broadcast was missed, so ghost avatars can't linger.
   for (const [id, rp] of remotePlayers) {
     if (!seen.has(id)) {
@@ -304,7 +304,7 @@ network.on('hit', msg => {
     localPlayer.takeDamage(msg.damage);
   }
   // Kill confirm from server (client-side hit marker is already shown in player.js)
-  // — but not for suicides, where killer and victim are both us.
+  // - but not for suicides, where killer and victim are both us.
   if (msg.killed && msg.killerId === network.id && msg.victimId !== network.id) {
     audio.playKillConfirm();
     hud.showKillConfirm();
@@ -323,8 +323,8 @@ network.on('killed', msg => {
 // on; later waves announce the growing count as each is cleared.
 network.on('botWave', msg => {
   hud.showNotification(msg.first
-    ? 'Bot mode ON — clear waves to face double the bots (B to stop)'
-    : `Wave cleared — ${msg.size} bots incoming`);
+    ? 'Bot mode ON - clear waves to face double the bots (B to stop)'
+    : `Wave cleared - ${msg.size} bots incoming`);
 });
 
 network.on('botMode', msg => {

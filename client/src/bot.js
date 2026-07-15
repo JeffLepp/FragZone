@@ -56,7 +56,7 @@ export class Bot {
     this._grp.position.copy(this._pos);
     this._scene.add(this._grp);
 
-    // Health bar — separate group so billboard lookAt doesn't fight body rotation
+    // Health bar - separate group so billboard lookAt doesn't fight body rotation
     const bgMesh = new THREE.Mesh(
       BOT_HP_BG_GEO,
       BOT_HP_BG_MAT,

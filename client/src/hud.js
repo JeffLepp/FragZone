@@ -620,7 +620,7 @@ export class HUD {
     const icons = { ak: '⚡', pistol: '✦', grenade: '💥' };
     const el    = document.createElement('div');
     el.className = `fz-kf-entry${isMine ? ' self-kill' : ''}`;
-    // Build with textContent — names come from the network and must never be
+    // Build with textContent - names come from the network and must never be
     // parsed as HTML (server sanitization is a second line of defense, not the
     // contract).
     const killer = document.createElement('b');
@@ -641,7 +641,7 @@ export class HUD {
 
   updateScoreboard(scores) {
     this._scores = scores;
-    // Re-render live if the player is holding Tab — otherwise the board shows
+    // Re-render live if the player is holding Tab - otherwise the board shows
     // the scores from the moment it was opened.
     if (this._scoreVisible) this._renderScoreRows();
   }

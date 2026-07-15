@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# FragZone — put the game server behind Cloudflare Tunnel (free, no compute).
+# FragZone - put the game server behind Cloudflare Tunnel (free, no compute).
 #
 # Adds an outbound-only cloudflared connector: no inbound web port is exposed,
 # no origin certificate is needed, and the real client IP arrives in
@@ -7,13 +7,13 @@
 #
 # Two phases, run in order so there is no downtime:
 #
-#   1) install — bring cloudflared up before creating or moving DNS:
+#   1) install - bring cloudflared up before creating or moving DNS:
 #        sudo TUNNEL_TOKEN=eyJ... bash tunnel-setup.sh
 #      Then, in the Cloudflare dashboard, add the Public Hostname
 #      (fragzone-server.<domain> -> HTTP localhost:8080). Traffic cuts over to
 #      the already-healthy tunnel. Verify: curl https://<host>/health
 #
-#   2) finalize — only AFTER the public hostname verifies through the tunnel;
+#   2) finalize - only AFTER the public hostname verifies through the tunnel;
 #      this also retires an old Caddy origin if one exists:
 #        sudo bash tunnel-setup.sh finalize
 set -euo pipefail

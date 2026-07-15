@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { COLLISION_BOXES, MAP_BOUNDS, RAMPS, SURF_RAMPS, RAMP_THICK, rampHeightAt } from './map.js';
 
 // Spiral ramps and surf ramps share the same solid-slab collision in _hits;
-// only RAMPS are walkable (surf ramps are ridden — see the surf branch).
+// only RAMPS are walkable (surf ramps are ridden - see the surf branch).
 const SOLID_RAMPS = [...RAMPS, ...SURF_RAMPS];
 
 // ── CS:Source-inspired physics constants (metric units) ──────────────────────
@@ -25,8 +25,8 @@ const NET_HZ        = 20;
 const BASE_SENS     = 0.00175; // rad per mouse count at sensitivity 1.0
 
 // Keys the game owns while the pointer is locked. Crouch is Alt, which the
-// browser also uses — Alt alone focuses the menu bar, Alt+D the address bar,
-// Alt+Arrow navigates history — so it must be preventDefault-ed on both
+// browser also uses - Alt alone focuses the menu bar, Alt+D the address bar,
+// Alt+Arrow navigates history - so it must be preventDefault-ed on both
 // keydown and keyup. (Alt+F4 is OS-reserved and unblockable; the
 // beforeunload guard in main.js catches accidental closes.)
 const GAME_KEYS = new Set([
@@ -52,7 +52,7 @@ const WEAPON_DEF = {
   },
 };
 
-// Shared across all impact/grenade meshes — the meshes themselves are cheap to
+// Shared across all impact/grenade meshes - the meshes themselves are cheap to
 // create, but geometry and material hold GPU buffers and must not be recreated
 // (and silently leaked) on every wall hit or grenade.
 const IMPACT_GEO  = new THREE.SphereGeometry(0.04, 4, 4);
@@ -143,7 +143,7 @@ export class LocalPlayer {
   _bindInput() {
     window.addEventListener('keydown', e => {
       this._keys.add(e.code);
-      // Only hijack Tab once we've joined (id set by 'init') — in the menu it
+      // Only hijack Tab once we've joined (id set by 'init') - in the menu it
       // must keep its default focus-navigation behaviour.
       if (e.code === 'Tab' && this.id) { e.preventDefault(); this._hud.showScoreboard(true); }
       if (document.pointerLockElement && GAME_KEYS.has(e.code)) e.preventDefault();
@@ -165,7 +165,7 @@ export class LocalPlayer {
         this._dy += e.movementY;
       }
     });
-    // Only register fire input while the pointer is locked — otherwise the
+    // Only register fire input while the pointer is locked - otherwise the
     // click that re-acquires pointer lock (or hits a menu button) fires a shot.
     window.addEventListener('mousedown', e => {
       if (e.button === 0 && document.pointerLockElement) this._lmbDown = true;
@@ -173,7 +173,7 @@ export class LocalPlayer {
     window.addEventListener('mouseup',   e => { if (e.button === 0) this._lmbDown = false; });
 
     // Alt-tab / pointer-lock loss can swallow keyup and mouseup events,
-    // leaving keys (and the trigger) stuck held — release everything.
+    // leaving keys (and the trigger) stuck held - release everything.
     const releaseInput = () => {
       this._keys.clear();
       this._lmbDown = false;
@@ -467,7 +467,7 @@ export class LocalPlayer {
     const wishSpeed  = crouching ? CROUCH_SPEED : isWalking ? WALK_SPEED : MAX_SPEED;
 
     if (this._onGround) {
-      // Jump check before friction — skipping friction on the landing frame
+      // Jump check before friction - skipping friction on the landing frame
       // lets bhop preserve speed and accumulate with each hop.
       if (this._keys.has('Space')) {
         this._vel.y    = JUMP_VEL;
@@ -483,7 +483,7 @@ export class LocalPlayer {
       this._accel(wx, wz, wishSpeed, GROUND_ACCEL, dt);
 
     } else {
-      // No wishSpeed cap in air — bhop speed accumulates freely
+      // No wishSpeed cap in air - bhop speed accumulates freely
       this._accel(wx, wz, wishSpeed, AIR_ACCEL, dt);
       this._vel.y -= GRAVITY * dt;
     }
@@ -512,7 +512,7 @@ export class LocalPlayer {
 
     // ── Vertical ──
     // Grounded: snap to the surface underfoot every frame (floor, slab top,
-    // or ramp grade). This keeps _onGround stable — testing the capsule
+    // or ramp grade). This keeps _onGround stable - testing the capsule
     // against box tops instead made it flicker, retriggering the land-bob and
     // jittering the camera whenever the player stood on raised geometry.
     if (this._onGround) {
@@ -533,7 +533,7 @@ export class LocalPlayer {
         if (surf) {
           // Surfing: pin to the surface and clip velocity along its plane
           // (Source's slide rule). Never grounded, so there is no friction
-          // and no jump — the gravity re-applied each frame becomes
+          // and no jump - the gravity re-applied each frame becomes
           // acceleration down the slope, and air-strafe steers.
           this._pos.y = surf.h;
           const d = this._vel.x * surf.r.nx + this._vel.y * surf.r.ny + this._vel.z * surf.r.nz;
@@ -607,7 +607,7 @@ export class LocalPlayer {
   // The surf ramp surface the falling capsule is crossing this frame, if any:
   // center over the ramp, surface passed between the previous y (with slack
   // for the height change from this frame's horizontal move) and the next,
-  // and still above the walkable support — at the ramp's foot the floor
+  // and still above the walkable support - at the ramp's foot the floor
   // takes over and the rider lands.
   _surfAt(x, z, ny, g) {
     for (const rp of SURF_RAMPS) {
@@ -628,7 +628,7 @@ export class LocalPlayer {
           z1 > b.minZ && z0 < b.maxZ) return true;
     }
     // Ramps are solid slabs, except approached from above with the surface
-    // within step-up reach of the feet — then the grounded snap (or the surf
+    // within step-up reach of the feet - then the grounded snap (or the surf
     // pin) walks the capsule along the grade instead of treating the slope
     // as a wall.
     for (const rp of SOLID_RAMPS) {
@@ -759,7 +759,7 @@ export class LocalPlayer {
     // Shoot cooldown
     if (this._shootCD > 0) this._shootCD -= dt;
 
-    // Fire input — _tryShoot enforces semi-auto (fresh click) for the pistol
+    // Fire input - _tryShoot enforces semi-auto (fresh click) for the pistol
     if (this._lmbDown) this._tryShoot();
     this._semi_prev = this._lmbDown;
 

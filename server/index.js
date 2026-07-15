@@ -58,8 +58,8 @@ const SPAWN_POINTS = [
   [  0, 0, -22], [ 0, 0,  22],
 ];
 
-// Wall/crate AABBs — mirrors WALL_DEFS in client/src/map.js (the visual source
-// of truth; the client is deployed separately, so the data is hand-synced —
+// Wall/crate AABBs - mirrors WALL_DEFS in client/src/map.js (the visual source
+// of truth; the client is deployed separately, so the data is hand-synced -
 // update both files together). Used for grenade bounces and explosion cover.
 const WALL_H = 3.2;
 function aabb(cx, cz, w, d, h = WALL_H, cy = h / 2) {
@@ -72,7 +72,7 @@ function aabb(cx, cz, w, d, h = WALL_H, cy = h / 2) {
 const wallBox  = (cx, cz, w, d)         => aabb(cx, cz, w, d);
 const crateBox = (cx, cz, w = 2, d = 2) => aabb(cx, cz, w, d, 1.5, 0.75);
 
-// Mid skyscraper — mirrors towerDefs()/RAMPS/SURF_RAMPS in client/src/map.js
+// Mid skyscraper - mirrors towerDefs()/RAMPS/SURF_RAMPS in client/src/map.js
 // (same hand-sync rule as the rest of this list): hollow 22 m tower, N/S
 // doorways, a smooth ramp spiralling up the inner walls (2.5 laps, 21 m rise
 // over an 87 m run), a rooftop deck at y 21, and four steep surf ramps from
@@ -125,7 +125,7 @@ function towerBoxes() {
   B(-3.85, TOWER_TOP - 0.2,    2.0,  1.3, 0.4,  7.0);
   B( 3.5,  TOWER_TOP - 0.175, -4.75, 2,   0.35, 1.5);
 
-  // Surf ramps — ~46° slabs from the parapet gaps, cut short of the floor
+  // Surf ramps - ~46° slabs from the parapet gaps, cut short of the floor
   // (bottom edge hangs at y 4); one thin slab every 0.5 m of run at the local
   // surface height. (x1, z1) is where the slope would meet the floor.
   const SURF_W = 3, SURF_END = 4;
@@ -170,7 +170,7 @@ const COLLISION_BOXES = [
 ];
 
 // Hitscan weapons a client may name in a 'shoot' message. Grenade damage is
-// computed server-side in the explosion loop and must not be listed here —
+// computed server-side in the explosion loop and must not be listed here -
 // the damage floor in applyDamage would turn a 0-damage 'shoot' into 1 hp.
 const WEAPON_DATA = {
   ak:     { damage: 27, rpm: 600 },
@@ -207,7 +207,7 @@ const PICKUP_DEFS = [
 
 // Bots are now server-authoritative and shared by every player (mirrors the
 // old client-only logic in client/src/bot.js, ported here). Bot mode is a
-// single game-wide toggle — any player pressing B flips it for the whole match.
+// single game-wide toggle - any player pressing B flips it for the whole match.
 const BOT_HP_MAX      = 100;
 const BOT_DAMAGE      = 10;
 const BOT_R           = 0.38;
@@ -219,7 +219,7 @@ const BOT_SHOOT_INT   = 1.0;  // seconds between shot attempts
 const BOT_ACCURACY    = 0.48; // probability of dealing damage per attempt with LOS
 const BOT_WAVE_BREAK  = 2.5;  // seconds between clearing a wave and the next spawn
 const MAX_BOTS        = envInt('MAX_BOTS', 32, 1, 128);
-// Matches client/src/map.js MAP_BOUNDS — keeps bots inside the arena.
+// Matches client/src/map.js MAP_BOUNDS - keeps bots inside the arena.
 const BOT_BOUNDS      = { minX: -29.4, maxX: 29.4, minZ: -29.4, maxZ: 29.4 };
 
 const players     = new Map(); // ws -> player
@@ -538,7 +538,7 @@ function applyBotDamage(victim, damage, botName) {
 // Bots (server-authoritative, shared by all players)
 // ---------------------------------------------------------------------------
 
-// True if a bot standing at (x, z) would overlap map geometry — mirrors
+// True if a bot standing at (x, z) would overlap map geometry - mirrors
 // botBlockedAt in client/src/bot.js.
 function botBlockedAt(x, z) {
   for (const b of COLLISION_BOXES) {
@@ -676,7 +676,7 @@ function updateBots(dt) {
 // ---------------------------------------------------------------------------
 
 // Tick + event-loop instrumentation. Both histograms are stdlib (perf_hooks),
-// so percentiles come free — no metrics dependency.
+// so percentiles come free - no metrics dependency.
 const tickHist = createHistogram();
 const loopLag  = monitorEventLoopDelay({ resolution: 10 });
 loopLag.enable();
@@ -931,7 +931,7 @@ wss.on('connection', ws => {
         const gvel = vec3(msg.vel);
         // Reject non-finite vectors (NaN would poison the physics loop and get
         // broadcast), throws not originating at the player, and superhuman arm
-        // strength — the real client throws at ~17 m/s from eye height.
+        // strength - the real client throws at ~17 m/s from eye height.
         if (!gpos || !gvel) break;
         if (dist3(gpos, player.pos) > MAX_NADE_DIST) break;
         if (Math.hypot(...gvel) > MAX_NADE_SPEED) break;
@@ -958,7 +958,7 @@ wss.on('connection', ws => {
   });
 
   // 'close' always follows 'error', so removal (and the playerLeft broadcast)
-  // happens there — deleting here too would skip the broadcast and leave a
+  // happens there - deleting here too would skip the broadcast and leave a
   // frozen ghost avatar on every client. Listener kept so ws doesn't throw.
   ws.on('error', () => {});
 });
@@ -1003,7 +1003,7 @@ const tick = () => {
     // Move axis-by-axis so a wall hit on one axis still lets the grenade
     // slide/bounce along the others (same scheme the client uses for players).
     // A throw released while hugging a wall can spawn already overlapping a
-    // box — let it fly freely until it's clear, or it would jitter in place.
+    // box - let it fly freely until it's clear, or it would jitter in place.
     const embedded = grenadeBlocked(g.pos[0], g.pos[1], g.pos[2]);
 
     const nx = g.pos[0] + g.vel[0] * dt;
@@ -1158,7 +1158,7 @@ let shuttingDown = false;
 function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
-  console.log(`${signal} received — shutting down`);
+  console.log(`${signal} received - shutting down`);
 
   clearInterval(tickTimer);          // stop the simulation
   clearInterval(heartbeatTimer);     // stop socket liveness probes

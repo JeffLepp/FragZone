@@ -1,4 +1,4 @@
-// FragZone load test — drives N real WebSocket clients against a server and
+// FragZone load test - drives N real WebSocket clients against a server and
 // reports the numbers the migration needs (connection success, disconnects,
 // RTT percentiles, server tick/event-loop stats from /metrics).
 //
@@ -40,7 +40,7 @@ function spawnClient(i) {
   const ws = new WebSocket(WS_URL);
   const c  = { ws, id: null, pos: [0, 0, 0], yaw: 0, alive: true, peers: [], bots: [], timers: [] };
   // Each bot orbits its spawn on its own circle, so movement is continuous and
-  // always under MAX_SPEED — a teleport would be silently dropped by the server.
+  // always under MAX_SPEED - a teleport would be silently dropped by the server.
   const speed = 4 + (i % 4);
   let   theta = i * (Math.PI / 4);
   let   ready = false;
@@ -161,7 +161,7 @@ function spawnClient(i) {
   console.log(`target                 ${WS_URL}`);
   console.log(`clients                ${stats.connected}/${stats.attempted} connected (${rate}%)`);
   console.log(`unexpected disconnects ${Math.max(0, stats.disconnects)}`);
-  console.log(`socket errors          ${stats.failed}${stats.errors.length ? ' — ' + [...new Set(stats.errors)].join('; ') : ''}`);
+  console.log(`socket errors          ${stats.failed}${stats.errors.length ? ' - ' + [...new Set(stats.errors)].join('; ') : ''}`);
   console.log(`messages               ${stats.sent} sent / ${stats.recv} received`);
   console.log(`RTT p50 / p95 / max    ${pct(stats.rtt, 50)} / ${pct(stats.rtt, 95)} / ${pct(stats.rtt, 100)} ms  (n=${stats.rtt.length})`);
   if (final) {
@@ -176,6 +176,6 @@ function spawnClient(i) {
 
   const metricsOk = !METRICS_URL || (final && final.tick.p95 < final.tickTargetMs);
   const ok = stats.connected === stats.attempted && stats.failed === 0 && metricsOk;
-  console.log(ok ? '\nPASS' : '\nFAIL — see numbers above');
+  console.log(ok ? '\nPASS' : '\nFAIL - see numbers above');
   process.exit(ok ? 0 : 1);
 })();

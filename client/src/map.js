@@ -26,7 +26,7 @@ function crate(cx, cz, w = 2, d = 2) {
 // parapet. The ramp is not an AABB: RAMPS below describes sloped slabs that
 // player physics walks as surfaces (see player.js). Four gaps in the parapet
 // open onto steep surf ramps (SURF_RAMPS) that end mid-air short of the floor.
-// NOTE: mirrored by towerBoxes() in server/index.js — update both together.
+// NOTE: mirrored by towerBoxes() in server/index.js - update both together.
 export const TOWER_H    = 22;    // wall / parapet top
 export const TOWER_TOP  = 21;    // rooftop deck walking surface
 export const RAMP_THICK = 0.35;  // ramp slab thickness (surface down to underside)
@@ -38,7 +38,7 @@ function towerDefs() {
   const defs  = [];
   const B = (cx, cy, cz, w, h, d, color = wallC) => defs.push({ cx, cy, cz, w, h, d, color });
 
-  // Walls. Pieces that stop at TOWER_TOP leave gaps in the parapet above —
+  // Walls. Pieces that stop at TOWER_TOP leave gaps in the parapet above -
   // the rooftop exits onto the surf ramps (SURF_RAMPS below).
   for (const x of [-5, 5]) {
     B(x, TOWER_TOP / 2,   0,      1, TOWER_TOP, 13);   // up to deck level
@@ -55,8 +55,8 @@ function towerDefs() {
   B( 2.85, TOWER_H / 2, 6, 3.3, TOWER_H, 1);
   B(0, (TOWER_TOP + 2.4) / 2, 6, 2.4, TOWER_TOP - 2.4, 1);
 
-  // Rooftop deck (top at TOWER_TOP). Open above the final climb — the last
-  // west- and north-wall steps need head clearance — with a landing bridging
+  // Rooftop deck (top at TOWER_TOP). Open above the final climb - the last
+  // west- and north-wall steps need head clearance - with a landing bridging
   // the arrival in the NE corner.
   B( 0.65, TOWER_TOP - 0.2,    0.75, 7.7, 0.4,  9.5, deckC); // main deck
   B(-3.85, TOWER_TOP - 0.2,    2.0,  1.3, 0.4,  7.0, deckC); // west strip
@@ -66,7 +66,7 @@ function towerDefs() {
 
 // The spiral ramp: axis-aligned sloped slabs, centerline inset RAMP_W/2 from
 // the wall faces, rising at a constant grade (~24 %) from the floor at the SW
-// corner to the deck at the NE corner — 2.5 laps, 10 segments.
+// corner to the deck at the NE corner - 2.5 laps, 10 segments.
 function buildRamps() {
   const RX = 3.85, RZ = 4.85;
   const corners = [[-RX, RZ], [-RX, -RZ], [RX, -RZ], [RX, RZ]]; // SW NW NE SE
@@ -101,11 +101,11 @@ export function rampHeightAt(r, x, z) {
 
 // ── Surf ramps ────────────────────────────────────────────────────────────────
 // Four steep (~46°) slabs leaving the parapet gaps. Same shape as RAMPS
-// entries plus a surface normal — too steep to walk, so player physics rides
+// entries plus a surface normal - too steep to walk, so player physics rides
 // them CS-surf style instead of grounding (the surf branch in player.js clips
 // velocity along the plane). Each one is cut short of the floor: the bottom
 // edge hangs at SURF_END, so riders launch off the end and fall the rest, and
-// from the ground there is no tip to climb — the edge is out of jump reach
+// from the ground there is no tip to climb - the edge is out of jump reach
 // with full head clearance under it.
 const SURF_END = 4;
 function surfRamp(x0, z0, xf, zf) {
@@ -127,10 +127,10 @@ function surfRamp(x0, z0, xf, zf) {
   };
 }
 export const SURF_RAMPS = [
-  surfRamp( 5.5,  3.75,  26,  3.75), // E — through the east parapet gap
+  surfRamp( 5.5,  3.75,  26,  3.75), // E - through the east parapet gap
   surfRamp(-5.5,  3.75, -26,  3.75), // W
-  surfRamp( 3.5, -6.5,   3.5, -26),  // N — off the NE landing
-  surfRamp( 0,    6.5,   0,    26),  // S — above the south doorway
+  surfRamp( 3.5, -6.5,   3.5, -26),  // N - off the NE landing
+  surfRamp( 0,    6.5,   0,    26),  // S - above the south doorway
 ];
 
 export const WALL_DEFS = [
@@ -306,7 +306,7 @@ export function createMap(scene) {
   meshes.push(rampInstances);
 
   // Surf ramps: same slab treatment, but centered along the true surface
-  // normal — at ~46° the plain vertical offset used above would sink the
+  // normal - at ~46° the plain vertical offset used above would sink the
   // visual surface several cm below the physics surface.
   const surfMat = new THREE.MeshLambertMaterial({ color: 0x3F6D7D });
   const surfEuler = new THREE.Euler(0, 0, 0, 'YZX');
@@ -333,14 +333,14 @@ export function createMap(scene) {
 }
 
 // Skyscraper dressing: window panes on all four faces plus a parapet cap.
-// Purely visual — kept out of WALL_DEFS (no collision) and out of the returned
+// Purely visual - kept out of WALL_DEFS (no collision) and out of the returned
 // mesh list (bullets hit the wall 3 cm behind a pane anyway).
 function addTowerDecor(scene) {
   const nsPane   = new THREE.BoxGeometry(1.1, 1.6, 0.06);
   const ewPane   = new THREE.BoxGeometry(0.06, 1.6, 1.1);
   const glassMat = new THREE.MeshLambertMaterial({ color: 0x111820, emissive: 0x070D12 });
   const litMat   = new THREE.MeshLambertMaterial({ color: 0xD6A95D, emissive: 0x6F4E20 });
-  // Deterministic "some lights are on" pattern — stable across reloads.
+  // Deterministic "some lights are on" pattern - stable across reloads.
   const lit = seed => seed % 10 < 3;
   const panes = { nsDark: [], nsLit: [], ewDark: [], ewLit: [] };
 

@@ -2,7 +2,7 @@
 
 ![FragZone gameplay](FragzoneRepoShowcase.gif)
 
-# FragZone — Browser FPS
+# FragZone - Browser FPS
 
 ## [Play FragZone](https://fragzone.jeffersonkline.com)
 
@@ -41,23 +41,23 @@ reporting.
 
 ## Stack
 
-**Client**: Vite + Three.js (vanilla JS, no framework) — Vercel
+**Client**: Vite + Three.js (vanilla JS, no framework) - Vercel
 
-**Server**: Node.js + ws (WebSocket) — Oracle Cloud ARM VM, Cloudflare Tunnel + systemd
+**Server**: Node.js + ws (WebSocket) - Oracle Cloud ARM VM, Cloudflare Tunnel + systemd
 
 </td>
 <td width="33.33%" valign="top">
 
 ## Local Dev
 
-**Terminal 1 — game server:**
+**Terminal 1 - game server:**
 ```bash
 cd server
 npm install
 npm run dev
 ```
 
-**Terminal 2 — client:**
+**Terminal 2 - client:**
 ```bash
 cd client
 npm install
