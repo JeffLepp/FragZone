@@ -10,6 +10,10 @@
 
 ---
 
+<table width="100%">
+<tr>
+<td width="32%" valign="top">
+
 ## Controls
 
 | Key | Action |
@@ -25,6 +29,9 @@
 | 1 / 2 | Switch weapon |
 | Tab | Scoreboard |
 | B | Toggle bots |
+
+</td>
+<td width="68%" valign="top">
 
 ## Local Dev
 
@@ -49,6 +56,10 @@ npm run dev
 cd server && npm test
 cd ../client && npm run build
 ```
+
+</td>
+</tr>
+</table>
 
 The server test covers origin rejection, player capacity, invalid JSON shapes,
 oversized frames, message-rate limiting, and private metrics.
