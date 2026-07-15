@@ -84,10 +84,10 @@ FragZone is an independent project and is not affiliated with, endorsed by, or
 sponsored by Valve Corporation. Counter-Strike and Valve are trademarks or
 registered trademarks of Valve Corporation.
 
-The original FragZone code and assets are **source available, all rights
-reserved**; public visibility does not grant permission to reuse or redistribute
-them. See [LICENSE.md](LICENSE.md). Direct dependencies retain their own MIT
-licenses; see [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).
+FragZone is available under the permissive [MIT License](LICENSE.md). You may
+use, modify, distribute, host, and sell copies, provided the license notice is
+included. Third-party software retains its own license terms; see
+[THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).
 
 Players must be 13 or older and agree to the live service's
 [Terms of Use](https://fragzone.jeffersonkline.com/terms.html) and
