@@ -142,6 +142,8 @@ fi
 
 echo "==> Firewall"
 # ufw: only SSH + HTTP(S). 8080 is never opened — the app binds 127.0.0.1 anyway.
+# Also restrict Oracle's VCN rule for port 22 to trusted administrator IPs; ufw
+# keeps SSH open here so rerunning this script cannot lock out the operator.
 ufw allow OpenSSH >/dev/null
 ufw allow 80/tcp  >/dev/null
 ufw allow 443/tcp >/dev/null
