@@ -34,17 +34,17 @@ function startServer() {
   });
 }
 
-function openSocket(url, origin = ALLOWED_ORIGIN) {
+function openSocket(url, origin = ALLOWED_ORIGIN, headers = {}) {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(url, { origin });
+    const ws = new WebSocket(url, { origin, headers });
     ws.once('open', () => resolve(ws));
     ws.once('error', reject);
   });
 }
 
-function rejectedStatus(url, origin) {
+function rejectedStatus(url, origin, headers = {}) {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(url, { origin });
+    const ws = new WebSocket(url, { origin, headers });
     ws.once('open', () => {
       ws.close();
       reject(new Error('connection unexpectedly opened'));
@@ -106,6 +106,16 @@ test('public-server security boundaries', { timeout: 15000 }, async t => {
   const oversizedClosed = nextClose(oversized);
   oversized.send(JSON.stringify({ type: 'noop', padding: 'x'.repeat(20 * 1024) }));
   assert.equal((await oversizedClosed).code, 1009);
+
+  // Spoofing the first X-Forwarded-For entry must not dodge the per-IP cap:
+  // only the proxy-appended last hop identifies the client.
+  const spoofer = await openSocket(socketUrl, ALLOWED_ORIGIN,
+    { 'x-forwarded-for': 'fake-a, 198.51.100.7' });
+  assert.equal(await rejectedStatus(socketUrl, ALLOWED_ORIGIN,
+    { 'x-forwarded-for': 'fake-b, 198.51.100.7' }), 429);
+  const spooferClosed = nextClose(spoofer);
+  spoofer.close();
+  await spooferClosed;
 
   const player = await openSocket(socketUrl);
   const init = nextMessage(player);

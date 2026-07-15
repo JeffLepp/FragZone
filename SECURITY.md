@@ -18,7 +18,8 @@ branch. Older revisions are not maintained.
 ## Deployment boundary
 
 The game server is designed to run as the unprivileged `fragzone` user, bound
-to loopback behind Caddy. Do not expose port 8080 publicly, commit environment
+to loopback and reachable only through an outbound-only Cloudflare Tunnel
+connector (`cloudflared`). Do not expose port 8080 publicly, commit environment
 files, or disable the configured WebSocket origin and resource limits. Restrict
 SSH/22 to trusted administrator IPs in the Oracle VCN and require key-based SSH
 authentication.

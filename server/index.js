@@ -3,7 +3,8 @@ const { WebSocketServer } = require('ws');
 const crypto = require('crypto');
 const { createHistogram, monitorEventLoopDelay } = require('perf_hooks');
 
-// Behind a reverse proxy (Caddy) in production, systemd pins HOST=127.0.0.1 so
+// Behind a loopback reverse proxy (cloudflared via Cloudflare Tunnel; Caddy in
+// the legacy direct-origin setup) in production, systemd pins HOST=127.0.0.1 so
 // the app is never reachable from the public internet except through TLS.
 // The 0.0.0.0 default keeps `npm run dev` working on a LAN.
 function envInt(name, fallback, min, max) {
@@ -246,10 +247,13 @@ function clientIp(req) {
   const remote = req.socket.remoteAddress || 'unknown';
   // Only trust forwarding metadata from the loopback reverse proxy. A direct
   // LAN/dev connection cannot spoof its way around the per-IP ceiling.
+  // Use the LAST entry: the trusted hop (cloudflared/Caddy) appends the real
+  // client IP, while earlier entries arrive verbatim from the attacker — a
+  // client-sent "X-Forwarded-For: fake" must not defeat the per-IP cap.
   if (isLoopback(remote)) {
     const forwarded = req.headers['x-forwarded-for'];
     if (typeof forwarded === 'string' && forwarded.length <= 256) {
-      return forwarded.split(',')[0].trim() || remote;
+      return forwarded.split(',').pop().trim() || remote;
     }
   }
   return remote;
@@ -689,8 +693,9 @@ const server = http.createServer((req, res) => {
     return reply(req, res, 200, '{"status":"ok"}', 'application/json; charset=utf-8');
   }
 
-  // Operational metrics are intentionally loopback-only. Caddy adds
-  // X-Forwarded-For, so a public request cannot look like a local one.
+  // Operational metrics are intentionally loopback-only. The reverse proxy
+  // (cloudflared or Caddy) always adds X-Forwarded-For, so a public request
+  // cannot look like a local one.
   if (path === '/metrics' && isLoopback(req.socket.remoteAddress) && !req.headers['x-forwarded-for']) {
     const ms = ns => Math.round(ns / 1e5) / 10;
     return reply(req, res, 200, JSON.stringify({

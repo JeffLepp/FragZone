@@ -12,7 +12,7 @@
 
 <table width="100%">
 <tr>
-<td width="32%" valign="top">
+<td width="28%" valign="top">
 
 ## Controls
 
@@ -31,7 +31,22 @@
 | B | Toggle bots |
 
 </td>
-<td width="68%" valign="top">
+<td width="27%" valign="top">
+
+## Security
+
+[exploits.md](exploits.md) documents the client-abuse controls and their known
+trust boundaries; [SECURITY.md](SECURITY.md) is for private vulnerability
+reporting.
+
+## Stack
+
+**Client**: Vite + Three.js (vanilla JS, no framework) — Vercel
+
+**Server**: Node.js + ws (WebSocket) — Oracle Cloud ARM VM, Cloudflare Tunnel + systemd
+
+</td>
+<td width="45%" valign="top">
 
 ## Local Dev
 
@@ -60,17 +75,6 @@ cd ../client && npm run build
 </td>
 </tr>
 </table>
-
-The server test covers origin rejection, player capacity, invalid JSON shapes,
-oversized frames, message-rate limiting, and private metrics.
-[exploits.md](exploits.md) documents the client-abuse controls and their known
-trust boundaries; [SECURITY.md](SECURITY.md) is for private vulnerability
-reporting.
-
-## Stack
-
-- **Client**: Vite + Three.js (vanilla JS, no framework) — Vercel
-- **Server**: Node.js + ws (WebSocket) — Oracle Cloud ARM VM, Cloudflare Tunnel + systemd
 
 ## Legal and project status
 
