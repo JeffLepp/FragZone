@@ -45,6 +45,8 @@ reporting.
 
 **Server**: Node.js + ws (WebSocket) - Oracle Cloud ARM VM, Cloudflare Tunnel + systemd
 
+**Operations**: [Production deployment and rollback guide](deploy/README.md)
+
 </td>
 <td width="33.33%" valign="top">
 

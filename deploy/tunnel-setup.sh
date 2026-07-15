@@ -8,7 +8,7 @@
 # Two phases, run in order so there is no downtime:
 #
 #   1) install - bring cloudflared up before creating or moving DNS:
-#        sudo TUNNEL_TOKEN=eyJ... bash tunnel-setup.sh
+#        sudo env TUNNEL_TOKEN='<connector-token>' bash tunnel-setup.sh install
 #      Then, in the Cloudflare dashboard, add the Public Hostname
 #      (fragzone-server.<domain> -> HTTP localhost:8080). Traffic cuts over to
 #      the already-healthy tunnel. Verify: curl https://<host>/health
