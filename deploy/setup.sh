@@ -33,6 +33,15 @@ if [[ "$SITE_ORIGINS" == *$'\n'* || "$SITE_ORIGINS" == *$'\r'* ]]; then
   echo "SITE_ORIGINS must be a comma-separated, single-line value" >&2
   exit 1
 fi
+if [[ -n "$SITE_ORIGINS" ]]; then
+  IFS=',' read -r -a ORIGINS <<< "$SITE_ORIGINS"
+  for origin in "${ORIGINS[@]}"; do
+    if [[ ! "$origin" =~ ^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?$ ]]; then
+      echo "invalid SITE_ORIGINS entry: $origin" >&2
+      exit 1
+    fi
+  done
+fi
 
 echo "==> Packages"
 export DEBIAN_FRONTEND=noninteractive

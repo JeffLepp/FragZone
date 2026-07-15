@@ -13,5 +13,8 @@
   },
   "devDependencies": {
     "vite": "^8.1.4"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
   }
 }
