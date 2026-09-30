@@ -9,7 +9,7 @@
     "test": "node --test security.test.js"
   },
   "dependencies": {
-    "ws": "^8.21.1"
+    "ws": "^8.22.0"
   },
   "engines": {
     "node": ">=18"
